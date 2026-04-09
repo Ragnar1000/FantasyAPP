@@ -1,3 +1,364 @@
 import streamlit as st
-st.title("⚽ FIFA Fantasy App")
-st.write("This is my new live app!")
+from datetime import datetime, timezone, timedelta
+import firebase_admin
+from firebase_admin import credentials, firestore
+
+# --- 1. TIMEZONE & FIREBASE SETUP ---
+PKT = timezone(timedelta(hours=5), name="PKT")
+
+# Check if Firebase is already connected to avoid crashing
+if not firebase_admin._apps:
+    try:
+        cred = credentials.Certificate(dict(st.secrets["firebase"]))
+        firebase_admin.initialize_app(cred)
+    except Exception as e:
+        st.error("⚠️ Firebase Secrets not found! Please check your Streamlit Settings.")
+        st.stop()
+
+db = firestore.client()
+
+def get_tournaments():
+    docs = db.collection('tournaments').stream()
+    return sorted([doc.id for doc in docs])
+
+# --- 2. SESSION STATE ---
+if 'logged_in' not in st.session_state:
+    st.session_state['logged_in'] = False
+    st.session_state['role'] = None
+    st.session_state['username'] = ""
+
+# --- 3. LOGIN & REGISTRATION ---
+if not st.session_state['logged_in']:
+    st.title("🏆 Fantasy App")
+    tab1, tab2 = st.tabs(["Login", "Register Account"])
+    
+    with tab1:
+        u_log = st.text_input("Username", key="l_u").strip()
+        p_log = st.text_input("Password", type="password", key="l_p")
+        if st.button("Login"):
+            if u_log == "admin" and p_log == st.secrets.get("admin_password", "host123"):
+                st.session_state.update({"logged_in": True, "role": "Host", "username": "Admin"})
+                st.rerun()
+            else:
+                # FIREBASE: Fetch user document
+                user_doc = db.collection('users').document(u_log).get()
+                if user_doc.exists and user_doc.to_dict().get('password') == p_log:
+                    st.session_state.update({"logged_in": True, "role": "User", "username": u_log})
+                    st.rerun()
+                else:
+                    st.error("Invalid credentials.")
+                    
+    with tab2:
+        u_reg = st.text_input("New Username", key="r_u").strip()
+        p_reg = st.text_input("New Password", type="password", key="r_p")
+        if st.button("Register"):
+            if u_reg and p_reg:
+                if u_reg.lower() == "admin":
+                    st.error("Cannot use that username.")
+                else:
+                    # FIREBASE: Check if user exists, then create
+                    doc_ref = db.collection('users').document(u_reg)
+                    if doc_ref.get().exists:
+                        st.error("Username taken!")
+                    else:
+                        doc_ref.set({'password': p_reg})
+                        st.success("Account created! Go to Login.")
+
+# --- 4. THE MAIN APP ---
+else:
+    with st.sidebar:
+        st.header(f"Logged in as: {st.session_state['username']}")
+        st.write(f"🕒 PKT: {datetime.now(PKT).strftime('%I:%M %p')}")
+        if st.button("Logout"):
+            st.session_state['logged_in'] = False
+            st.rerun()
+
+    active_tournaments = get_tournaments()
+
+    # ==========================================
+    # HOST DASHBOARD
+    # ==========================================
+    if st.session_state['role'] == "Host":
+        st.title("🛠️ Host Dashboard")
+        h_tabs = st.tabs(["🏆 Tournaments", "➕ Manage Matches", "📋 Player Picks", "📊 Leaderboard", "🗑️ Users"])
+
+        # Tab 1: Manage Tournaments
+        with h_tabs[0]:
+            st.subheader("Create a Tournament")
+            new_t = st.text_input("New Tournament Name (e.g., BBL, World Cup)").strip()
+            if st.button("Create Tournament"):
+                st.session_state['confirm_create_t'] = True
+                
+            if st.session_state.get('confirm_create_t', False):
+                st.warning(f"Confirm creating '{new_t}'?")
+                c1, c2 = st.columns(2)
+                if c1.button("Yes", key="yes_ct"):
+                    if new_t:
+                        doc_ref = db.collection('tournaments').document(new_t)
+                        if not doc_ref.get().exists:
+                            doc_ref.set({'created': True})
+                            st.session_state['confirm_create_t'] = False
+                            st.success("Tournament created!")
+                            st.rerun()
+                        else:
+                            st.error("Tournament already exists!")
+                if c2.button("No", key="no_ct"):
+                    st.session_state['confirm_create_t'] = False
+                    st.rerun()
+
+            st.divider()
+            st.subheader("Delete a Tournament")
+            if active_tournaments:
+                del_t = st.selectbox("Select Tournament to Delete", active_tournaments)
+                if st.button("Delete Tournament"):
+                    st.session_state['confirm_del_t'] = True
+                    
+                if st.session_state.get('confirm_del_t', False):
+                    st.warning(f"Confirm deleting '{del_t}'? (This won't delete past matches)")
+                    c1, c2 = st.columns(2)
+                    if c1.button("Yes", key="yes_dt"):
+                        db.collection('tournaments').document(del_t).delete()
+                        st.session_state['confirm_del_t'] = False
+                        st.rerun()
+                    if c2.button("No", key="no_dt"):
+                        st.session_state['confirm_del_t'] = False
+                        st.rerun()
+            else:
+                st.info("No tournaments available.")
+
+        # Tab 2: Create Matches & Set Winners
+        with h_tabs[1]:
+            st.subheader("Add New Match")
+            if not active_tournaments:
+                st.error("Please create a tournament first!")
+            else:
+                tourney = st.selectbox("Select Tournament", active_tournaments)
+                t1, t2 = st.text_input("Team 1"), st.text_input("Team 2")
+                d_date = st.date_input("Deadline Date")
+                d_time = st.time_input("Deadline Time (PKT)")
+                
+                if st.button("Save Match"):
+                    st.session_state['confirm_save_m'] = True
+                    
+                if st.session_state.get('confirm_save_m', False):
+                    st.warning("Confirm creating this match?")
+                    c1, c2 = st.columns(2)
+                    if c1.button("Yes", key="yes_cm"):
+                        dt = datetime.combine(d_date, d_time).replace(tzinfo=PKT).isoformat()
+                        match_name = f"{t1} vs {t2}"
+                        db.collection('matches').document(match_name).set({
+                            'tournament': tourney, 'team1': t1, 'team2': t2, 
+                            'winner': "PENDING", 'deadline': dt
+                        })
+                        st.session_state['confirm_save_m'] = False
+                        st.success("Match saved!")
+                        st.rerun()
+                    if c2.button("No", key="no_cm"):
+                        st.session_state['confirm_save_m'] = False
+                        st.rerun()
+            
+            st.divider()
+            st.subheader("Set Winners or Delete Match")
+            pending_docs = db.collection('matches').where('winner', '==', 'PENDING').stream()
+            pending = {doc.id: doc.to_dict() for doc in pending_docs}
+            
+            for m_name, m_data in pending.items():
+                col1, col2, col3 = st.columns([2, 1, 1])
+                win = col1.selectbox(f"Winner for {m_name}", [m_data['team1'], m_data['team2']], key=f"host_{m_name}")
+                
+                if col2.button("Lock", key=f"host_btn_{m_name}"):
+                    st.session_state[f'confirm_lock_{m_name}'] = True
+                if col3.button("Delete", key=f"host_del_{m_name}"):
+                    st.session_state[f'confirm_del_m_{m_name}'] = True
+                    
+                if st.session_state.get(f'confirm_lock_{m_name}', False):
+                    st.warning(f"Confirm locking '{win}' as the winner for {m_name}?")
+                    c1, c2 = st.columns(2)
+                    if c1.button("Yes", key=f"y_lock_{m_name}"):
+                        db.collection('matches').document(m_name).update({'winner': win})
+                        st.session_state[f'confirm_lock_{m_name}'] = False
+                        st.rerun()
+                    if c2.button("No", key=f"n_lock_{m_name}"):
+                        st.session_state[f'confirm_lock_{m_name}'] = False
+                        st.rerun()
+
+                if st.session_state.get(f'confirm_del_m_{m_name}', False):
+                    st.error(f"Confirm deleting match '{m_name}'? This wipes user predictions.")
+                    c1, c2 = st.columns(2)
+                    if c1.button("Yes, Delete", key=f"y_del_{m_name}"):
+                        db.collection('matches').document(m_name).delete()
+                        # Delete associated predictions
+                        preds = db.collection('predictions').where('match_name', '==', m_name).stream()
+                        for p in preds: p.reference.delete()
+                        st.session_state[f'confirm_del_m_{m_name}'] = False
+                        st.rerun()
+                    if c2.button("No, Cancel", key=f"n_del_{m_name}"):
+                        st.session_state[f'confirm_del_m_{m_name}'] = False
+                        st.rerun()
+
+        # Tab 3: Player Picks
+        with h_tabs[2]:
+            st.subheader("All Player Predictions")
+            view_tourney = st.radio("Filter by Tournament", ["All"] + active_tournaments, horizontal=True)
+            
+            if view_tourney == "All":
+                picks = db.collection('predictions').stream()
+            else:
+                picks = db.collection('predictions').where('tournament', '==', view_tourney).stream()
+                
+            picks_data = [p.to_dict() for p in picks]
+            if picks_data:
+                st.table([{"Tournament": p['tournament'], "Player": p['username'], "Match": p['match_name'], "Their Pick": p['user_guess']} for p in picks_data])
+            else:
+                st.info("No predictions made yet.")
+
+        # Tab 4: HOST LEADERBOARD
+        with h_tabs[3]:
+            st.subheader("Current Rankings")
+            if active_tournaments:
+                l_tourney = st.selectbox("Select Tournament Leaderboard", active_tournaments, key="host_lead")
+                
+                m_docs = db.collection('matches').where('tournament', '==', l_tourney).stream()
+                completed = {m.id: m.to_dict()['winner'] for m in m_docs if m.to_dict().get('winner') != 'PENDING'}
+                
+                p_docs = db.collection('predictions').where('tournament', '==', l_tourney).stream()
+                
+                scores = {}
+                for p in p_docs:
+                    data = p.to_dict()
+                    user, match, guess = data['username'], data['match_name'], data['user_guess']
+                    if user not in scores: scores[user] = {'W': 0, 'L': 0}
+                    if match in completed:
+                        if guess == completed[match]: scores[user]['W'] += 1
+                        else: scores[user]['L'] += 1
+                        
+                if scores:
+                    sorted_scores = sorted([{"Player": k, "Wins": v['W'], "Losses": v['L']} for k, v in scores.items()], key=lambda x: x['Wins'], reverse=True)
+                    st.table(sorted_scores)
+                else:
+                    st.info(f"No completed matches for {l_tourney} yet.")
+
+        # Tab 5: MANAGE USERS
+        with h_tabs[4]:
+            st.subheader("Remove Users")
+            users = [u.id for u in db.collection('users').stream() if u.id != 'admin']
+            if users:
+                user_to_delete = st.selectbox("Select user to remove", users)
+                if st.button("Delete User"):
+                    st.session_state['confirm_del_u'] = True
+                    
+                if st.session_state.get('confirm_del_u', False):
+                    st.warning(f"Confirm completely deleting user '{user_to_delete}'?")
+                    c1, c2 = st.columns(2)
+                    if c1.button("Yes", key="y_du"):
+                        db.collection('users').document(user_to_delete).delete()
+                        preds = db.collection('predictions').where('username', '==', user_to_delete).stream()
+                        for p in preds: p.reference.delete()
+                        st.session_state['confirm_del_u'] = False
+                        st.success(f"User {user_to_delete} deleted!")
+                        st.rerun()
+                    if c2.button("No", key="n_du"):
+                        st.session_state['confirm_del_u'] = False
+                        st.rerun()
+            else:
+                st.info("No registered users found.")
+
+    # ==========================================
+    # USER DASHBOARD
+    # ==========================================
+    else:
+        u_tabs = st.tabs(["🎮 Predict", "🏆 Leaderboard", "👤 Profile & History"])
+        
+        with u_tabs[0]:
+            st.title("Fantasy Predictions")
+            if not active_tournaments:
+                st.warning("The host hasn't created any tournaments yet.")
+            else:
+                p_tourney = st.radio("Select Tournament", active_tournaments, horizontal=True)
+                st.divider()
+                
+                # Fetch pending matches for tournament
+                all_matches = {m.id: m.to_dict() for m in db.collection('matches').where('tournament', '==', p_tourney).where('winner', '==', 'PENDING').stream()}
+                
+                # Fetch matches already predicted by user
+                user_preds = [p.to_dict()['match_name'] for p in db.collection('predictions').where('username', '==', st.session_state['username']).where('tournament', '==', p_tourney).stream()]
+                
+                available_matches = {k: v for k, v in all_matches.items() if k not in user_preds}
+                
+                if not available_matches:
+                    st.success("🎉 You are all caught up! Check the 'Profile & History' tab.")
+                else:
+                    st.info(f"You have {len(available_matches)} match(es) left to predict in {p_tourney}.")
+                    m_sel = st.selectbox("Choose Match", list(available_matches.keys()))
+                    m_data = available_matches[m_sel]
+                    
+                    dead = datetime.fromisoformat(m_data['deadline'])
+                    st.write(f"Deadline: **{dead.strftime('%b %d, %I:%M %p')}**")
+                    
+                    if datetime.now(PKT) > dead:
+                        st.error("Closed!")
+                    else:
+                        pick = st.radio("Who wins?", [m_data['team1'], m_data['team2']], key=f"user_pick_{m_sel}")
+                        
+                        if st.button("Submit Pick"):
+                            st.session_state[f'confirm_pick_{m_sel}'] = True
+                            
+                        if st.session_state.get(f'confirm_pick_{m_sel}', False):
+                            st.warning(f"Confirm locking in '{pick}' for this match?")
+                            c1, c2 = st.columns(2)
+                            if c1.button("Yes", key=f"y_pick_{m_sel}"):
+                                db.collection('predictions').add({
+                                    'username': st.session_state['username'],
+                                    'match_name': m_sel,
+                                    'user_guess': pick,
+                                    'tournament': p_tourney
+                                })
+                                st.session_state[f'confirm_pick_{m_sel}'] = False
+                                st.rerun()
+                            if c2.button("No", key=f"n_pick_{m_sel}"):
+                                st.session_state[f'confirm_pick_{m_sel}'] = False
+                                st.rerun()
+                                        
+        with u_tabs[1]:
+            st.title("Leaderboards")
+            if active_tournaments:
+                user_l_tourney = st.selectbox("Select Tournament Leaderboard", active_tournaments, key="user_lead")
+                
+                m_docs = db.collection('matches').where('tournament', '==', user_l_tourney).stream()
+                completed = {m.id: m.to_dict()['winner'] for m in m_docs if m.to_dict().get('winner') != 'PENDING'}
+                
+                p_docs = db.collection('predictions').where('tournament', '==', user_l_tourney).stream()
+                
+                scores = {}
+                for p in p_docs:
+                    data = p.to_dict()
+                    user, match, guess = data['username'], data['match_name'], data['user_guess']
+                    if user not in scores: scores[user] = {'W': 0, 'L': 0}
+                    if match in completed:
+                        if guess == completed[match]: scores[user]['W'] += 1
+                        else: scores[user]['L'] += 1
+                        
+                if scores:
+                    sorted_scores = sorted([{"User": k, "Wins": v['W'], "Losses": v['L']} for k, v in scores.items()], key=lambda x: x['Wins'], reverse=True)
+                    st.table(sorted_scores)
+                else:
+                    st.info(f"No completed matches for {user_l_tourney} yet.")
+                    
+        with u_tabs[2]:
+            st.title("👤 Profile & History")
+            hist_docs = db.collection('predictions').where('username', '==', st.session_state['username']).stream()
+            hist_data = [h.to_dict() for h in hist_docs]
+            
+            if hist_data:
+                m_docs = {m.id: m.to_dict().get('winner') for m in db.collection('matches').stream()}
+                table_data = []
+                for h in hist_data:
+                    actual_winner = m_docs.get(h['match_name'], 'PENDING')
+                    status = "⏳ Pending" if actual_winner == 'PENDING' else ("✅ Won" if h['user_guess'] == actual_winner else "❌ Lost")
+                    table_data.append({
+                        "Tournament": h['tournament'], "Match": h['match_name'], 
+                        "Your Pick": h['user_guess'], "Status": status
+                    })
+                st.table(table_data)
+            else:
+                st.info("You haven't made any predictions yet.")
