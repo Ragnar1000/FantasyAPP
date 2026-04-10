@@ -80,7 +80,7 @@ else:
     # ==========================================
     if st.session_state['role'] == "Host":
         st.title("🛠️ Host Dashboard")
-        h_tabs = st.tabs(["🏆 Tournaments", "➕ Manage Matches", "📋 Player Picks", "📊 Leaderboard", "🗑️ Users"])
+        h_tabs = st.tabs(["🏆 Tournaments", "➕ Manage Matches", "📋 Player Picks", "📊 Leaderboard", "🗑️ Users", "💬 Chat"])
 
         # Tab 1: Manage Tournaments
         with h_tabs[0]:
@@ -240,7 +240,6 @@ else:
                     m_list.append(d)
                 
                 if m_list:
-                    # Sort matches by closest deadline so Host sees immediate priorities first
                     m_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']))
                     match_options = [m['match_id'] for m in m_list]
                     
@@ -307,11 +306,38 @@ else:
             else:
                 st.info("No registered users found.")
 
+        # Tab 6: HOST CHAT
+        with h_tabs[5]:
+            st.title("💬 Global Match Chat")
+            c1, c2 = st.columns([4, 1])
+            c1.write("Discuss predictions, trash talk, and match updates here!")
+            if c2.button("🔄 Refresh"):
+                st.rerun()
+            
+            with st.container(height=500):
+                chat_docs = db.collection('chats').stream()
+                chat_list = [doc.to_dict() for doc in chat_docs]
+                chat_list.sort(key=lambda x: x['timestamp'])
+                
+                for msg in chat_list[-50:]:  # Show last 50 messages
+                    role = "assistant" if msg['username'] == "Admin" else "user"
+                    with st.chat_message(role):
+                        st.markdown(f"**{msg['username']}**: {msg['message']}")
+                        st.caption(datetime.fromisoformat(msg['timestamp']).strftime('%b %d, %I:%M %p'))
+
+            if prompt := st.chat_input("Say something..."):
+                db.collection('chats').add({
+                    'username': st.session_state['username'],
+                    'message': prompt,
+                    'timestamp': datetime.now(PKT).isoformat()
+                })
+                st.rerun()
+
     # ==========================================
     # USER DASHBOARD
     # ==========================================
     else:
-        u_tabs = st.tabs(["🎮 Predict", "🏆 Leaderboard", "👤 Profile & History"])
+        u_tabs = st.tabs(["🎮 Predict", "🏆 Leaderboard", "👤 Profile & History", "💬 Chat"])
         
         with u_tabs[0]:
             st.title("Fantasy Predictions")
@@ -321,12 +347,8 @@ else:
                 p_tourney = st.radio("Select Tournament", active_tournaments, horizontal=True)
                 st.divider()
                 
-                # Fetch pending matches for tournament
                 all_matches = {m.id: m.to_dict() for m in db.collection('matches').where('tournament', '==', p_tourney).where('winner', '==', 'PENDING').stream()}
-                
-                # Fetch matches already predicted by user
                 user_preds = [p.to_dict()['match_name'] for p in db.collection('predictions').where('username', '==', st.session_state['username']).where('tournament', '==', p_tourney).stream()]
-                
                 available_matches = {k: v for k, v in all_matches.items() if k not in user_preds}
                 
                 if not available_matches:
@@ -334,10 +356,8 @@ else:
                 else:
                     st.info(f"You have {len(available_matches)} match(es) left to predict in {p_tourney}.")
                     
-                    # Sort matches by closest deadline
                     sorted_matches = sorted(available_matches.items(), key=lambda x: datetime.fromisoformat(x[1]['deadline']))
                     
-                    # Create a scrollable container for the UI Feed
                     with st.container(height=600):
                         for m_sel, m_data in sorted_matches:
                             st.markdown(f"### **{m_sel}**")
@@ -396,8 +416,6 @@ else:
                     
         with u_tabs[2]:
             st.title("👤 Profile & History")
-            
-            # Fetch user's predictions and save the Document ID so we can edit it later
             hist_docs = db.collection('predictions').where('username', '==', st.session_state['username']).stream()
             hist_data = []
             for doc in hist_docs:
@@ -406,29 +424,22 @@ else:
                 hist_data.append(d)
                 
             if hist_data:
-                # Fetch all matches to compare deadlines
                 m_docs = {m.id: m.to_dict() for m in db.collection('matches').stream()}
-                
                 editable_picks = []
                 locked_picks = []
                 
-                # Sort predictions into Editable vs Locked
                 for h in hist_data:
                     m_info = m_docs.get(h['match_name'])
                     if m_info:
                         dead = datetime.fromisoformat(m_info['deadline'])
                         actual_winner = m_info.get('winner', 'PENDING')
-                        
-                        # If deadline hasn't passed AND host hasn't locked a winner
                         if datetime.now(PKT) < dead and actual_winner == 'PENDING':
                             editable_picks.append((h, m_info))
                         else:
                             locked_picks.append((h, m_info))
                 
-                # Sort editable picks by closest deadline
                 editable_picks.sort(key=lambda x: datetime.fromisoformat(x[1]['deadline']))
                 
-                # DISPLAY EDITABLE PICKS
                 if editable_picks:
                     st.subheader("✏️ Editable Predictions")
                     st.info("You can change these picks until the match deadline.")
@@ -438,10 +449,8 @@ else:
                         
                         with st.expander(f"{m_name} (Deadline: {dead.strftime('%b %d, %I:%M %p')})"):
                             st.write(f"Current Pick: **{h['user_guess']}**")
-                            
                             options = [m_info['team1'], m_info['team2']]
                             curr_idx = options.index(h['user_guess']) if h['user_guess'] in options else 0
-                            
                             new_pick = st.radio("Change pick to:", options, index=curr_idx, key=f"edit_{h['doc_id']}")
                             
                             if st.button("Update Pick", key=f"btn_edit_{h['doc_id']}"):
@@ -453,8 +462,6 @@ else:
                                     st.warning("You already selected this team.")
                 
                 st.divider()
-                
-                # DISPLAY LOCKED/PAST PICKS
                 st.subheader("📜 Past & Locked Predictions")
                 if locked_picks:
                     table_data = []
@@ -468,6 +475,32 @@ else:
                     st.table(table_data)
                 else:
                     st.info("No locked predictions yet.")
-                    
             else:
                 st.info("You haven't made any predictions yet.")
+
+        # Tab 4: USER CHAT
+        with u_tabs[3]:
+            st.title("💬 Global Match Chat")
+            c1, c2 = st.columns([4, 1])
+            c1.write("Discuss predictions, trash talk, and match updates here!")
+            if c2.button("🔄 Refresh"):
+                st.rerun()
+            
+            with st.container(height=500):
+                chat_docs = db.collection('chats').stream()
+                chat_list = [doc.to_dict() for doc in chat_docs]
+                chat_list.sort(key=lambda x: x['timestamp'])
+                
+                for msg in chat_list[-50:]:  # Show last 50 messages
+                    role = "assistant" if msg['username'] == "Admin" else "user"
+                    with st.chat_message(role):
+                        st.markdown(f"**{msg['username']}**: {msg['message']}")
+                        st.caption(datetime.fromisoformat(msg['timestamp']).strftime('%b %d, %I:%M %p'))
+
+            if prompt := st.chat_input("Say something..."):
+                db.collection('chats').add({
+                    'username': st.session_state['username'],
+                    'message': prompt,
+                    'timestamp': datetime.now(PKT).isoformat()
+                })
+                st.rerun()
