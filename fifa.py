@@ -116,10 +116,20 @@ else:
                     st.session_state['confirm_del_t'] = True
                     
                 if st.session_state.get('confirm_del_t', False):
-                    st.warning(f"Confirm deleting '{del_t}'? (This won't delete past matches)")
+                    st.error(f"Confirm deleting '{del_t}'? (This WILL wipe all matches and predictions inside it)")
                     c1, c2 = st.columns(2)
-                    if c1.button("Yes", key="yes_dt"):
+                    if c1.button("Yes, Delete All", key="yes_dt"):
+                        # 1. Delete the tournament
                         db.collection('tournaments').document(del_t).delete()
+                        
+                        # 2. Delete all matches in this tournament
+                        m_to_del = db.collection('matches').where('tournament', '==', del_t).stream()
+                        for m in m_to_del: m.reference.delete()
+                        
+                        # 3. Delete all predictions in this tournament
+                        p_to_del = db.collection('predictions').where('tournament', '==', del_t).stream()
+                        for p in p_to_del: p.reference.delete()
+                            
                         st.session_state['confirm_del_t'] = False
                         st.rerun()
                     if c2.button("No", key="no_dt"):
@@ -394,6 +404,11 @@ else:
                 locked_picks = []
                 
                 for h in hist_data:
+                    # 1. Skip if the tournament was deleted by the host
+                    if h.get('tournament') not in active_tournaments:
+                        continue
+                        
+                    # 2. Check if the match itself still exists
                     m_info = m_docs.get(h['match_name'])
                     if m_info:
                         dead = datetime.fromisoformat(m_info['deadline'])
