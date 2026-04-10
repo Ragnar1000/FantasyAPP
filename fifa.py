@@ -158,24 +158,19 @@ else:
             st.divider()
             st.subheader("Manage Existing Matches")
             if active_tournaments:
-                # Add Tournament Filter for Host
                 m_tourney = st.selectbox("Select Tournament to Manage", active_tournaments, key="manage_t")
                 
-                # Fetch only matches for the selected tournament
                 pending_docs = db.collection('matches').where('tournament', '==', m_tourney).where('winner', '==', 'PENDING').stream()
                 
-                # Extract data into a list so we can sort it
                 pending_list = []
                 for doc in pending_docs:
                     data = doc.to_dict()
                     data['match_id'] = doc.id
                     pending_list.append(data)
                 
-                # Sort the list by deadline (closest deadline first)
                 pending_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']))
                 
                 if pending_list:
-                    # Create sub-tabs for Set Winners and Delete Matches
                     manage_tabs = st.tabs(["🏆 Set Winners", "🗑️ Delete Matches"])
                     
                     with manage_tabs[0]:
@@ -217,7 +212,6 @@ else:
                                 c1, c2 = st.columns(2)
                                 if c1.button("Yes, Delete", key=f"y_del_{m_name}"):
                                     db.collection('matches').document(m_name).delete()
-                                    # Delete associated predictions
                                     preds = db.collection('predictions').where('match_name', '==', m_name).stream()
                                     for p in preds: p.reference.delete()
                                     st.session_state[f'confirm_del_m_{m_name}'] = False
@@ -378,19 +372,75 @@ else:
                     
         with u_tabs[2]:
             st.title("👤 Profile & History")
-            hist_docs = db.collection('predictions').where('username', '==', st.session_state['username']).stream()
-            hist_data = [h.to_dict() for h in hist_docs]
             
+            # Fetch user's predictions and save the Document ID so we can edit it later
+            hist_docs = db.collection('predictions').where('username', '==', st.session_state['username']).stream()
+            hist_data = []
+            for doc in hist_docs:
+                d = doc.to_dict()
+                d['doc_id'] = doc.id
+                hist_data.append(d)
+                
             if hist_data:
-                m_docs = {m.id: m.to_dict().get('winner') for m in db.collection('matches').stream()}
-                table_data = []
+                # Fetch all matches to compare deadlines
+                m_docs = {m.id: m.to_dict() for m in db.collection('matches').stream()}
+                
+                editable_picks = []
+                locked_picks = []
+                
+                # Sort predictions into Editable vs Locked
                 for h in hist_data:
-                    actual_winner = m_docs.get(h['match_name'], 'PENDING')
-                    status = "⏳ Pending" if actual_winner == 'PENDING' else ("✅ Won" if h['user_guess'] == actual_winner else "❌ Lost")
-                    table_data.append({
-                        "Tournament": h['tournament'], "Match": h['match_name'], 
-                        "Your Pick": h['user_guess'], "Status": status
-                    })
-                st.table(table_data)
+                    m_info = m_docs.get(h['match_name'])
+                    if m_info:
+                        dead = datetime.fromisoformat(m_info['deadline'])
+                        actual_winner = m_info.get('winner', 'PENDING')
+                        
+                        # If deadline hasn't passed AND host hasn't locked a winner
+                        if datetime.now(PKT) < dead and actual_winner == 'PENDING':
+                            editable_picks.append((h, m_info))
+                        else:
+                            locked_picks.append((h, m_info))
+                
+                # DISPLAY EDITABLE PICKS
+                if editable_picks:
+                    st.subheader("✏️ Editable Predictions")
+                    st.info("You can change these picks until the match deadline.")
+                    for h, m_info in editable_picks:
+                        m_name = h['match_name']
+                        dead = datetime.fromisoformat(m_info['deadline'])
+                        
+                        with st.expander(f"{m_name} (Deadline: {dead.strftime('%b %d, %I:%M %p')})"):
+                            st.write(f"Current Pick: **{h['user_guess']}**")
+                            
+                            options = [m_info['team1'], m_info['team2']]
+                            curr_idx = options.index(h['user_guess']) if h['user_guess'] in options else 0
+                            
+                            new_pick = st.radio("Change pick to:", options, index=curr_idx, key=f"edit_{h['doc_id']}")
+                            
+                            if st.button("Update Pick", key=f"btn_edit_{h['doc_id']}"):
+                                if new_pick != h['user_guess']:
+                                    db.collection('predictions').document(h['doc_id']).update({'user_guess': new_pick})
+                                    st.success("Pick updated!")
+                                    st.rerun()
+                                else:
+                                    st.warning("You already selected this team.")
+                
+                st.divider()
+                
+                # DISPLAY LOCKED/PAST PICKS
+                st.subheader("📜 Past & Locked Predictions")
+                if locked_picks:
+                    table_data = []
+                    for h, m_info in locked_picks:
+                        actual_winner = m_info.get('winner', 'PENDING')
+                        status = "⏳ Locked (Awaiting Result)" if actual_winner == 'PENDING' else ("✅ Won" if h['user_guess'] == actual_winner else "❌ Lost")
+                        table_data.append({
+                            "Tournament": h['tournament'], "Match": h['match_name'], 
+                            "Your Pick": h['user_guess'], "Status": status
+                        })
+                    st.table(table_data)
+                else:
+                    st.info("No locked predictions yet.")
+                    
             else:
                 st.info("You haven't made any predictions yet.")
