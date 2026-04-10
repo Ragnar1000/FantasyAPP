@@ -401,6 +401,9 @@ else:
                         else:
                             locked_picks.append((h, m_info))
                 
+                # Sort editable picks by closest deadline
+                editable_picks.sort(key=lambda x: datetime.fromisoformat(x[1]['deadline']))
+                
                 # DISPLAY EDITABLE PICKS
                 if editable_picks:
                     st.subheader("✏️ Editable Predictions")
