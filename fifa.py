@@ -40,7 +40,6 @@ if not st.session_state['logged_in']:
                 st.session_state.update({"logged_in": True, "role": "Host", "username": "Admin"})
                 st.rerun()
             else:
-                # FIREBASE: Fetch user document
                 user_doc = db.collection('users').document(u_log).get()
                 if user_doc.exists and user_doc.to_dict().get('password') == p_log:
                     st.session_state.update({"logged_in": True, "role": "User", "username": u_log})
@@ -56,7 +55,6 @@ if not st.session_state['logged_in']:
                 if u_reg.lower() == "admin":
                     st.error("Cannot use that username.")
                 else:
-                    # FIREBASE: Check if user exists, then create
                     doc_ref = db.collection('users').document(u_reg)
                     if doc_ref.get().exists:
                         st.error("Username taken!")
@@ -158,43 +156,77 @@ else:
                         st.rerun()
             
             st.divider()
-            st.subheader("Set Winners or Delete Match")
-            pending_docs = db.collection('matches').where('winner', '==', 'PENDING').stream()
-            pending = {doc.id: doc.to_dict() for doc in pending_docs}
-            
-            for m_name, m_data in pending.items():
-                col1, col2, col3 = st.columns([2, 1, 1])
-                win = col1.selectbox(f"Winner for {m_name}", [m_data['team1'], m_data['team2']], key=f"host_{m_name}")
+            st.subheader("Manage Existing Matches")
+            if active_tournaments:
+                # Add Tournament Filter for Host
+                m_tourney = st.selectbox("Select Tournament to Manage", active_tournaments, key="manage_t")
                 
-                if col2.button("Lock", key=f"host_btn_{m_name}"):
-                    st.session_state[f'confirm_lock_{m_name}'] = True
-                if col3.button("Delete", key=f"host_del_{m_name}"):
-                    st.session_state[f'confirm_del_m_{m_name}'] = True
+                # Fetch only matches for the selected tournament
+                pending_docs = db.collection('matches').where('tournament', '==', m_tourney).where('winner', '==', 'PENDING').stream()
+                
+                # Extract data into a list so we can sort it
+                pending_list = []
+                for doc in pending_docs:
+                    data = doc.to_dict()
+                    data['match_id'] = doc.id
+                    pending_list.append(data)
+                
+                # Sort the list by deadline (closest deadline first)
+                pending_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']))
+                
+                if pending_list:
+                    # Create sub-tabs for Set Winners and Delete Matches
+                    manage_tabs = st.tabs(["🏆 Set Winners", "🗑️ Delete Matches"])
                     
-                if st.session_state.get(f'confirm_lock_{m_name}', False):
-                    st.warning(f"Confirm locking '{win}' as the winner for {m_name}?")
-                    c1, c2 = st.columns(2)
-                    if c1.button("Yes", key=f"y_lock_{m_name}"):
-                        db.collection('matches').document(m_name).update({'winner': win})
-                        st.session_state[f'confirm_lock_{m_name}'] = False
-                        st.rerun()
-                    if c2.button("No", key=f"n_lock_{m_name}"):
-                        st.session_state[f'confirm_lock_{m_name}'] = False
-                        st.rerun()
-
-                if st.session_state.get(f'confirm_del_m_{m_name}', False):
-                    st.error(f"Confirm deleting match '{m_name}'? This wipes user predictions.")
-                    c1, c2 = st.columns(2)
-                    if c1.button("Yes, Delete", key=f"y_del_{m_name}"):
-                        db.collection('matches').document(m_name).delete()
-                        # Delete associated predictions
-                        preds = db.collection('predictions').where('match_name', '==', m_name).stream()
-                        for p in preds: p.reference.delete()
-                        st.session_state[f'confirm_del_m_{m_name}'] = False
-                        st.rerun()
-                    if c2.button("No, Cancel", key=f"n_del_{m_name}"):
-                        st.session_state[f'confirm_del_m_{m_name}'] = False
-                        st.rerun()
+                    with manage_tabs[0]:
+                        for m_data in pending_list:
+                            m_name = m_data['match_id']
+                            dead = datetime.fromisoformat(m_data['deadline'])
+                            st.write(f"**{m_name}** | Deadline: {dead.strftime('%b %d, %I:%M %p')}")
+                            
+                            col1, col2 = st.columns([2, 1])
+                            win = col1.selectbox("Winner", [m_data['team1'], m_data['team2']], key=f"host_win_{m_name}", label_visibility="collapsed")
+                            
+                            if col2.button("Lock Winner", key=f"host_btn_{m_name}"):
+                                st.session_state[f'confirm_lock_{m_name}'] = True
+                                
+                            if st.session_state.get(f'confirm_lock_{m_name}', False):
+                                st.warning(f"Confirm locking '{win}' as winner for {m_name}?")
+                                c1, c2 = st.columns(2)
+                                if c1.button("Yes", key=f"y_lock_{m_name}"):
+                                    db.collection('matches').document(m_name).update({'winner': win})
+                                    st.session_state[f'confirm_lock_{m_name}'] = False
+                                    st.rerun()
+                                if c2.button("No", key=f"n_lock_{m_name}"):
+                                    st.session_state[f'confirm_lock_{m_name}'] = False
+                                    st.rerun()
+                                    
+                    with manage_tabs[1]:
+                        for m_data in pending_list:
+                            m_name = m_data['match_id']
+                            dead = datetime.fromisoformat(m_data['deadline'])
+                            
+                            col1, col2 = st.columns([2, 1])
+                            col1.write(f"**{m_name}** | {dead.strftime('%b %d, %I:%M %p')}")
+                            
+                            if col2.button("Delete Match", key=f"host_del_{m_name}"):
+                                st.session_state[f'confirm_del_m_{m_name}'] = True
+                                
+                            if st.session_state.get(f'confirm_del_m_{m_name}', False):
+                                st.error(f"Confirm deleting '{m_name}'? This wipes user predictions.")
+                                c1, c2 = st.columns(2)
+                                if c1.button("Yes, Delete", key=f"y_del_{m_name}"):
+                                    db.collection('matches').document(m_name).delete()
+                                    # Delete associated predictions
+                                    preds = db.collection('predictions').where('match_name', '==', m_name).stream()
+                                    for p in preds: p.reference.delete()
+                                    st.session_state[f'confirm_del_m_{m_name}'] = False
+                                    st.rerun()
+                                if c2.button("No, Cancel", key=f"n_del_{m_name}"):
+                                    st.session_state[f'confirm_del_m_{m_name}'] = False
+                                    st.rerun()
+                else:
+                    st.info("No pending matches to manage for this tournament.")
 
         # Tab 3: Player Picks
         with h_tabs[2]:
