@@ -1,3 +1,2 @@
 streamlit
 firebase-admin
-extra-streamlit-components

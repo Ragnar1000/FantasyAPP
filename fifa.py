@@ -2,7 +2,6 @@ import streamlit as st
 from datetime import datetime, timezone, timedelta
 import firebase_admin
 from firebase_admin import credentials, firestore
-import extra_streamlit_components as stx
 
 # --- 1. TIMEZONE & FIREBASE SETUP ---
 PKT = timezone(timedelta(hours=5), name="PKT")
@@ -18,9 +17,6 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 
-# --- 1.5 COOKIE MANAGER SETUP ---
-cookie_manager = stx.CookieManager()
-
 def get_tournaments():
     docs = db.collection('tournaments').stream()
     return sorted([doc.id for doc in docs])
@@ -30,16 +26,6 @@ if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
     st.session_state['role'] = None
     st.session_state['username'] = ""
-
-# AUTO-LOGIN CHECK (Reads the cookies)
-if not st.session_state['logged_in']:
-    saved_user = cookie_manager.get(cookie="fantasy_user")
-    saved_role = cookie_manager.get(cookie="fantasy_role")
-    if saved_user and saved_role:
-        st.session_state['logged_in'] = True
-        st.session_state['role'] = saved_role
-        st.session_state['username'] = saved_user
-        st.rerun()
 
 # --- 3. LOGIN & REGISTRATION ---
 if not st.session_state['logged_in']:
@@ -51,17 +37,11 @@ if not st.session_state['logged_in']:
         p_log = st.text_input("Password", type="password", key="l_p")
         if st.button("Login"):
             if u_log == "admin" and p_log == st.secrets.get("admin_password", "host123"):
-                # Save cookies for 1 year
-                cookie_manager.set("fantasy_user", "Admin", expires_at=datetime.now() + timedelta(days=365))
-                cookie_manager.set("fantasy_role", "Host", expires_at=datetime.now() + timedelta(days=365))
                 st.session_state.update({"logged_in": True, "role": "Host", "username": "Admin"})
                 st.rerun()
             else:
                 user_doc = db.collection('users').document(u_log).get()
                 if user_doc.exists and user_doc.to_dict().get('password') == p_log:
-                    # Save cookies for 1 year
-                    cookie_manager.set("fantasy_user", u_log, expires_at=datetime.now() + timedelta(days=365))
-                    cookie_manager.set("fantasy_role", "User", expires_at=datetime.now() + timedelta(days=365))
                     st.session_state.update({"logged_in": True, "role": "User", "username": u_log})
                     st.rerun()
                 else:
@@ -88,9 +68,6 @@ else:
         st.header(f"Logged in as: {st.session_state['username']}")
         st.write(f"🕒 PKT: {datetime.now(PKT).strftime('%I:%M %p')}")
         if st.button("Logout"):
-            # Delete cookies on logout
-            cookie_manager.delete("fantasy_user")
-            cookie_manager.delete("fantasy_role")
             st.session_state['logged_in'] = False
             st.session_state['role'] = None
             st.session_state['username'] = ""
