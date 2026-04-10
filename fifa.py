@@ -224,19 +224,35 @@ else:
 
         # Tab 3: Player Picks
         with h_tabs[2]:
-            st.subheader("All Player Predictions")
-            view_tourney = st.radio("Filter by Tournament", ["All"] + active_tournaments, horizontal=True)
-            
-            if view_tourney == "All":
-                picks = db.collection('predictions').stream()
+            st.subheader("Player Predictions by Match")
+            if not active_tournaments:
+                st.info("No tournaments available.")
             else:
-                picks = db.collection('predictions').where('tournament', '==', view_tourney).stream()
+                view_tourney = st.radio("Select Tournament", active_tournaments, horizontal=True, key="host_picks_t")
                 
-            picks_data = [p.to_dict() for p in picks]
-            if picks_data:
-                st.table([{"Tournament": p['tournament'], "Player": p['username'], "Match": p['match_name'], "Their Pick": p['user_guess']} for p in picks_data])
-            else:
-                st.info("No predictions made yet.")
+                m_docs = db.collection('matches').where('tournament', '==', view_tourney).stream()
+                m_list = []
+                for doc in m_docs:
+                    d = doc.to_dict()
+                    d['match_id'] = doc.id
+                    m_list.append(d)
+                
+                if m_list:
+                    # Sort matches by closest deadline so Host sees immediate priorities first
+                    m_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']))
+                    match_options = [m['match_id'] for m in m_list]
+                    
+                    pick_m_sel = st.selectbox("Select Match (Nearest Deadline First)", match_options, key="host_picks_m")
+                    
+                    picks = db.collection('predictions').where('match_name', '==', pick_m_sel).stream()
+                    picks_data = [p.to_dict() for p in picks]
+                    
+                    if picks_data:
+                        st.table([{"Player": p['username'], "Their Pick": p['user_guess']} for p in picks_data])
+                    else:
+                        st.info("No predictions made for this match yet.")
+                else:
+                    st.info("No matches found for this tournament.")
 
         # Tab 4: HOST LEADERBOARD
         with h_tabs[3]:
@@ -315,35 +331,41 @@ else:
                     st.success("🎉 You are all caught up! Check the 'Profile & History' tab.")
                 else:
                     st.info(f"You have {len(available_matches)} match(es) left to predict in {p_tourney}.")
-                    m_sel = st.selectbox("Choose Match", list(available_matches.keys()))
-                    m_data = available_matches[m_sel]
                     
-                    dead = datetime.fromisoformat(m_data['deadline'])
-                    st.write(f"Deadline: **{dead.strftime('%b %d, %I:%M %p')}**")
+                    # Sort matches by closest deadline
+                    sorted_matches = sorted(available_matches.items(), key=lambda x: datetime.fromisoformat(x[1]['deadline']))
                     
-                    if datetime.now(PKT) > dead:
-                        st.error("Closed!")
-                    else:
-                        pick = st.radio("Who wins?", [m_data['team1'], m_data['team2']], key=f"user_pick_{m_sel}")
-                        
-                        if st.button("Submit Pick"):
-                            st.session_state[f'confirm_pick_{m_sel}'] = True
+                    # Create a scrollable container for the UI Feed
+                    with st.container(height=600):
+                        for m_sel, m_data in sorted_matches:
+                            st.markdown(f"### **{m_sel}**")
+                            dead = datetime.fromisoformat(m_data['deadline'])
+                            st.write(f"Deadline: **{dead.strftime('%b %d, %I:%M %p')}**")
                             
-                        if st.session_state.get(f'confirm_pick_{m_sel}', False):
-                            st.warning(f"Confirm locking in '{pick}' for this match?")
-                            c1, c2 = st.columns(2)
-                            if c1.button("Yes", key=f"y_pick_{m_sel}"):
-                                db.collection('predictions').add({
-                                    'username': st.session_state['username'],
-                                    'match_name': m_sel,
-                                    'user_guess': pick,
-                                    'tournament': p_tourney
-                                })
-                                st.session_state[f'confirm_pick_{m_sel}'] = False
-                                st.rerun()
-                            if c2.button("No", key=f"n_pick_{m_sel}"):
-                                st.session_state[f'confirm_pick_{m_sel}'] = False
-                                st.rerun()
+                            if datetime.now(PKT) > dead:
+                                st.error("Closed!")
+                            else:
+                                pick = st.radio("Choose option:", [m_data['team1'], m_data['team2']], key=f"user_pick_{m_sel}")
+                                
+                                if st.button("Predict", key=f"btn_pick_{m_sel}"):
+                                    st.session_state[f'confirm_pick_{m_sel}'] = True
+                                    
+                                if st.session_state.get(f'confirm_pick_{m_sel}', False):
+                                    st.warning(f"Confirm locking in '{pick}' for this match?")
+                                    c1, c2 = st.columns(2)
+                                    if c1.button("Yes", key=f"y_pick_{m_sel}"):
+                                        db.collection('predictions').add({
+                                            'username': st.session_state['username'],
+                                            'match_name': m_sel,
+                                            'user_guess': pick,
+                                            'tournament': p_tourney
+                                        })
+                                        st.session_state[f'confirm_pick_{m_sel}'] = False
+                                        st.rerun()
+                                    if c2.button("No", key=f"n_pick_{m_sel}"):
+                                        st.session_state[f'confirm_pick_{m_sel}'] = False
+                                        st.rerun()
+                            st.divider()
                                         
         with u_tabs[1]:
             st.title("Leaderboards")
