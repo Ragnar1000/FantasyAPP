@@ -35,6 +35,8 @@ if not st.session_state['logged_in']:
     with tab1:
         u_log = st.text_input("Username", key="l_u").strip()
         p_log = st.text_input("Password", type="password", key="l_p")
+        remember_me = st.checkbox("Remember Me")
+        
         if st.button("Login"):
             if u_log == "admin" and p_log == st.secrets.get("admin_password", "host123"):
                 st.session_state.update({"logged_in": True, "role": "Host", "username": "Admin"})
@@ -80,7 +82,7 @@ else:
     # ==========================================
     if st.session_state['role'] == "Host":
         st.title("🛠️ Host Dashboard")
-        h_tabs = st.tabs(["🏆 Tournaments", "➕ Manage Matches", "📋 Player Picks", "📊 Leaderboard", "🗑️ Users", "💬 Chat"])
+        h_tabs = st.tabs(["🏆 Tournaments", "➕ Manage Matches", "📋 Player Picks", "📊 Leaderboard", "🗑️ Users"])
 
         # Tab 1: Manage Tournaments
         with h_tabs[0]:
@@ -306,38 +308,11 @@ else:
             else:
                 st.info("No registered users found.")
 
-        # Tab 6: HOST CHAT
-        with h_tabs[5]:
-            st.title("💬 Global Match Chat")
-            c1, c2 = st.columns([4, 1])
-            c1.write("Discuss predictions, trash talk, and match updates here!")
-            if c2.button("🔄 Refresh"):
-                st.rerun()
-            
-            with st.container(height=500):
-                chat_docs = db.collection('chats').stream()
-                chat_list = [doc.to_dict() for doc in chat_docs]
-                chat_list.sort(key=lambda x: x['timestamp'])
-                
-                for msg in chat_list[-50:]:  # Show last 50 messages
-                    role = "assistant" if msg['username'] == "Admin" else "user"
-                    with st.chat_message(role):
-                        st.markdown(f"**{msg['username']}**: {msg['message']}")
-                        st.caption(datetime.fromisoformat(msg['timestamp']).strftime('%b %d, %I:%M %p'))
-
-            if prompt := st.chat_input("Say something..."):
-                db.collection('chats').add({
-                    'username': st.session_state['username'],
-                    'message': prompt,
-                    'timestamp': datetime.now(PKT).isoformat()
-                })
-                st.rerun()
-
     # ==========================================
     # USER DASHBOARD
     # ==========================================
     else:
-        u_tabs = st.tabs(["🎮 Predict", "🏆 Leaderboard", "👤 Profile & History", "💬 Chat"])
+        u_tabs = st.tabs(["🎮 Predict", "🏆 Leaderboard", "👤 Profile & History"])
         
         with u_tabs[0]:
             st.title("Fantasy Predictions")
@@ -370,23 +345,13 @@ else:
                                 pick = st.radio("Choose option:", [m_data['team1'], m_data['team2']], key=f"user_pick_{m_sel}")
                                 
                                 if st.button("Predict", key=f"btn_pick_{m_sel}"):
-                                    st.session_state[f'confirm_pick_{m_sel}'] = True
-                                    
-                                if st.session_state.get(f'confirm_pick_{m_sel}', False):
-                                    st.warning(f"Confirm locking in '{pick}' for this match?")
-                                    c1, c2 = st.columns(2)
-                                    if c1.button("Yes", key=f"y_pick_{m_sel}"):
-                                        db.collection('predictions').add({
-                                            'username': st.session_state['username'],
-                                            'match_name': m_sel,
-                                            'user_guess': pick,
-                                            'tournament': p_tourney
-                                        })
-                                        st.session_state[f'confirm_pick_{m_sel}'] = False
-                                        st.rerun()
-                                    if c2.button("No", key=f"n_pick_{m_sel}"):
-                                        st.session_state[f'confirm_pick_{m_sel}'] = False
-                                        st.rerun()
+                                    db.collection('predictions').add({
+                                        'username': st.session_state['username'],
+                                        'match_name': m_sel,
+                                        'user_guess': pick,
+                                        'tournament': p_tourney
+                                    })
+                                    st.rerun()
                             st.divider()
                                         
         with u_tabs[1]:
@@ -477,30 +442,3 @@ else:
                     st.info("No locked predictions yet.")
             else:
                 st.info("You haven't made any predictions yet.")
-
-        # Tab 4: USER CHAT
-        with u_tabs[3]:
-            st.title("💬 Global Match Chat")
-            c1, c2 = st.columns([4, 1])
-            c1.write("Discuss predictions, trash talk, and match updates here!")
-            if c2.button("🔄 Refresh"):
-                st.rerun()
-            
-            with st.container(height=500):
-                chat_docs = db.collection('chats').stream()
-                chat_list = [doc.to_dict() for doc in chat_docs]
-                chat_list.sort(key=lambda x: x['timestamp'])
-                
-                for msg in chat_list[-50:]:  # Show last 50 messages
-                    role = "assistant" if msg['username'] == "Admin" else "user"
-                    with st.chat_message(role):
-                        st.markdown(f"**{msg['username']}**: {msg['message']}")
-                        st.caption(datetime.fromisoformat(msg['timestamp']).strftime('%b %d, %I:%M %p'))
-
-            if prompt := st.chat_input("Say something..."):
-                db.collection('chats').add({
-                    'username': st.session_state['username'],
-                    'message': prompt,
-                    'timestamp': datetime.now(PKT).isoformat()
-                })
-                st.rerun()
