@@ -230,7 +230,7 @@ else:
                 else:
                     st.info("No pending matches to manage for this tournament.")
 
-        # Tab 3: Player Picks (Overrides removed)
+        # Tab 3: Player Picks
         with h_tabs[2]:
             st.subheader("Player Predictions by Match")
             if not active_tournaments:
@@ -270,7 +270,7 @@ else:
                 else:
                     st.success("No pending matches left in this tournament! (Completed matches are hidden).")
 
-        # Tab 4: HOST LEADERBOARD (With Manual Adjustments)
+        # Tab 4: HOST LEADERBOARD
         with h_tabs[3]:
             st.subheader("Current Rankings")
             if active_tournaments:
@@ -282,7 +282,6 @@ else:
                 p_docs = db.collection('predictions').where('tournament', '==', l_tourney).stream()
                 
                 scores = {}
-                # 1. Calculate dynamic scores
                 for p in p_docs:
                     data = p.to_dict()
                     user, match, guess = data['username'], data['match_name'], data['user_guess']
@@ -290,8 +289,8 @@ else:
                     if match in completed:
                         if guess == completed[match]: scores[user]['W'] += 1
                         else: scores[user]['L'] += 1
-                
-                # 2. Add manual adjustments
+                        
+                # Read manual adjustments in case any exist, so the host doesn't lose the corrections they just made
                 adj_docs = db.collection('leaderboard_adjustments').where('tournament', '==', l_tourney).stream()
                 for adj in adj_docs:
                     data = adj.to_dict()
@@ -305,36 +304,6 @@ else:
                     st.table(sorted_scores)
                 else:
                     st.info(f"No completed matches for {l_tourney} yet.")
-                    
-                st.divider()
-                st.subheader("🛠️ Manual Point Adjustments")
-                st.info("Use this to manually add or subtract Wins/Losses for a user. (Use negative numbers to subtract).")
-                
-                all_users = [u.id for u in db.collection('users').stream() if u.id != 'admin']
-                if all_users:
-                    adj_user = st.selectbox("Select User to Adjust", all_users, key="adj_u")
-                    c1, c2 = st.columns(2)
-                    adj_w = c1.number_input("Wins Adjustment (+/-)", value=0, step=1)
-                    adj_l = c2.number_input("Losses Adjustment (+/-)", value=0, step=1)
-                    
-                    if st.button("Apply Adjustment"):
-                        adj_ref = db.collection('leaderboard_adjustments').document(f"{adj_user}_{l_tourney}")
-                        existing = adj_ref.get()
-                        if existing.exists:
-                            curr = existing.to_dict()
-                            adj_ref.update({
-                                'adj_w': curr.get('adj_w', 0) + adj_w,
-                                'adj_l': curr.get('adj_l', 0) + adj_l
-                            })
-                        else:
-                            adj_ref.set({
-                                'username': adj_user,
-                                'tournament': l_tourney,
-                                'adj_w': adj_w,
-                                'adj_l': adj_l
-                            })
-                        st.success(f"Adjusted {adj_user}'s score by {adj_w} Wins and {adj_l} Losses!")
-                        st.rerun()
 
         # Tab 5: MANAGE USERS
         with h_tabs[4]:
@@ -418,7 +387,6 @@ else:
                 p_docs = db.collection('predictions').where('tournament', '==', user_l_tourney).stream()
                 
                 scores = {}
-                # 1. Calculate dynamic scores
                 for p in p_docs:
                     data = p.to_dict()
                     user, match, guess = data['username'], data['match_name'], data['user_guess']
@@ -426,8 +394,8 @@ else:
                     if match in completed:
                         if guess == completed[match]: scores[user]['W'] += 1
                         else: scores[user]['L'] += 1
-                
-                # 2. Add manual adjustments
+                        
+                # Factor in the adjustments you previously made
                 adj_docs = db.collection('leaderboard_adjustments').where('tournament', '==', user_l_tourney).stream()
                 for adj in adj_docs:
                     data = adj.to_dict()
