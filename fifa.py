@@ -230,7 +230,7 @@ else:
                 else:
                     st.info("No pending matches to manage for this tournament.")
 
-        # Tab 3: Player Picks (RESTORED MANUAL OVERRIDE - GOD MODE)
+        # Tab 3: Player Picks (Overrides removed completely)
         with h_tabs[2]:
             st.subheader("Player Predictions by Match")
             if not active_tournaments:
@@ -238,8 +238,8 @@ else:
             else:
                 view_tourney = st.radio("Select Tournament", active_tournaments, horizontal=True, key="host_picks_t")
                 
-                # FETCH ALL MATCHES (Pending and Locked) so the Host can override anything
-                m_docs = db.collection('matches').where('tournament', '==', view_tourney).stream()
+                # Fetch ONLY pending matches
+                m_docs = db.collection('matches').where('tournament', '==', view_tourney).where('winner', '==', 'PENDING').stream()
                 m_list = []
                 for doc in m_docs:
                     d = doc.to_dict()
@@ -250,18 +250,15 @@ else:
                     m_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']))
                     match_options = [m['match_id'] for m in m_list]
                     
-                    pick_m_sel = st.selectbox("Select Match to View/Override", match_options, key="host_picks_m")
+                    pick_m_sel = st.selectbox("Select Pending Match", match_options, key="host_picks_m")
                     
                     sel_m_data = next((m for m in m_list if m['match_id'] == pick_m_sel), None)
                     if sel_m_data:
-                        if sel_m_data.get('winner') != 'PENDING':
-                            st.error(f"✅ Match is already completed! Winner: **{sel_m_data['winner']}**. You can still force a pick update below.")
+                        dead = datetime.fromisoformat(sel_m_data['deadline'])
+                        if datetime.now(PKT) > dead:
+                            st.warning(f"⚠️ **Deadline Passed ({dead.strftime('%I:%M %p')}).** Match is locked.")
                         else:
-                            dead = datetime.fromisoformat(sel_m_data['deadline'])
-                            if datetime.now(PKT) > dead:
-                                st.warning(f"⚠️ **Deadline Passed ({dead.strftime('%I:%M %p')}).** Match is locked for users, but YOU can still override picks.")
-                            else:
-                                st.info(f"⏳ Match is open until {dead.strftime('%b %d, %I:%M %p')}.")
+                            st.info(f"⏳ Match is open until {dead.strftime('%b %d, %I:%M %p')}.")
                     
                     picks = db.collection('predictions').where('match_name', '==', pick_m_sel).stream()
                     picks_data = [p.to_dict() for p in picks]
@@ -270,49 +267,8 @@ else:
                         st.table([{"Player": p['username'], "Their Pick": p['user_guess']} for p in picks_data])
                     else:
                         st.info("No predictions made for this match yet.")
-                        
-                    st.divider()
-                    st.subheader("🛠️ Manual Override")
-                    st.info("As the Host, you can submit, change, or delete a pick on behalf of any user.")
-                    
-                    # FETCH ALL USERS (Included Admin in case you test it on yourself)
-                    users = [u.id for u in db.collection('users').stream()]
-                    
-                    if users:
-                        sel_user = st.selectbox("Select User", users, key="override_u")
-                        
-                        if sel_m_data:
-                            override_pick = st.radio("Select Team", [sel_m_data['team1'], sel_m_data['team2']], key="override_pick")
-                            
-                            c1, c2 = st.columns(2)
-                            if c1.button("Save / Update Pick"):
-                                existing_preds = list(db.collection('predictions').where('username', '==', sel_user).where('match_name', '==', pick_m_sel).stream())
-                                if existing_preds:
-                                    for doc in existing_preds:
-                                        doc.reference.update({'user_guess': override_pick})
-                                else:
-                                    db.collection('predictions').add({
-                                        'username': sel_user,
-                                        'match_name': pick_m_sel,
-                                        'user_guess': override_pick,
-                                        'tournament': view_tourney
-                                    })
-                                st.success(f"Successfully updated pick for {sel_user}!")
-                                st.rerun()
-                                
-                            if c2.button("🗑️ Delete Pick"):
-                                existing_preds = list(db.collection('predictions').where('username', '==', sel_user).where('match_name', '==', pick_m_sel).stream())
-                                if existing_preds:
-                                    for doc in existing_preds:
-                                        doc.reference.delete()
-                                    st.success(f"Deleted pick for {sel_user}!")
-                                    st.rerun()
-                                else:
-                                    st.warning("This user hasn't made a pick for this match.")
-                    else:
-                        st.warning("No users registered.")
                 else:
-                    st.info("No matches found in this tournament.")
+                    st.success("No pending matches left in this tournament! (Completed matches are hidden).")
 
         # Tab 4: HOST LEADERBOARD
         with h_tabs[3]:
