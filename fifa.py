@@ -87,7 +87,7 @@ else:
     # ==========================================
     if st.session_state['role'] == "Host":
         st.title("🛠️ Host Dashboard")
-        h_tabs = st.tabs(["🏆 Tournaments", "➕ Manage Matches", "📋 Player Picks", "📊 Leaderboard Rebuilder", "🗑️ Users"])
+        h_tabs = st.tabs(["🏆 Tournaments", "➕ Manage Matches", "📋 Player Picks", "📊 Leaderboard", "🗑️ Users"])
 
         # Tab 1: Manage Tournaments
         with h_tabs[0]:
@@ -263,7 +263,6 @@ else:
                 
                 if m_list:
                     m_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']))
-                    # Clean the names for the dropdown menu
                     match_options = {m['match_id']: format_match_name(m['match_id']) for m in m_list}
                     
                     pick_m_sel = st.selectbox(
@@ -283,7 +282,7 @@ else:
                 else:
                     st.warning("No matches currently exist to view.")
 
-        # Tab 4: HOST LEADERBOARD (THE REBUILDER IS BACK)
+        # Tab 4: HOST LEADERBOARD (Clean view, hidden math preserved)
         with h_tabs[3]:
             st.subheader("Current Rankings")
             if active_tournaments:
@@ -303,6 +302,7 @@ else:
                         if guess == completed[match]: scores[user]['W'] += 1
                         else: scores[user]['L'] += 1
                         
+                # Math reads database overrides seamlessly
                 adj_docs = db.collection('leaderboard_adjustments').where('tournament', '==', l_tourney).stream()
                 for adj in adj_docs:
                     data = adj.to_dict()
@@ -315,7 +315,8 @@ else:
                     sorted_scores = sorted([{"Player": k, "Wins": v['W'], "Losses": v['L']} for k, v in scores.items()], key=lambda x: x['Wins'], reverse=True)
                     st.table(sorted_scores)
                 else:
-                    st.info("No automatic points detected. Showing manual override scores:")
+                    # Show manual scores even if no matches exist yet
+                    st.info("No automatic points detected. Showing current scores:")
                     all_u = [u.id for u in db.collection('users').stream() if u.id != 'admin']
                     manual_scores = []
                     for user in all_u:
@@ -330,40 +331,8 @@ else:
                     if manual_scores:
                         manual_scores = sorted(manual_scores, key=lambda x: x['Wins'], reverse=True)
                         st.table(manual_scores)
-
-                st.divider()
-                st.subheader("🛠️ Leaderboard Rebuilder")
-                st.info("Type in exactly how many Wins and Losses a user should have. This will add permanently to their total.")
-                
-                all_users = [u.id for u in db.collection('users').stream() if u.id != 'admin']
-                if all_users:
-                    adj_user = st.selectbox("Select User to Rebuild", all_users, key="adj_u")
-                    
-                    adj_ref = db.collection('leaderboard_adjustments').document(f"{adj_user}_{l_tourney}")
-                    existing = adj_ref.get()
-                    curr_w = existing.to_dict().get('adj_w', 0) if existing.exists else 0
-                    curr_l = existing.to_dict().get('adj_l', 0) if existing.exists else 0
-                    
-                    st.write(f"Current Override for {adj_user}: **{curr_w} Wins**, **{curr_l} Losses**")
-                    
-                    c1, c2 = st.columns(2)
-                    adj_w = c1.number_input("Set Total Wins", value=0, step=1)
-                    adj_l = c2.number_input("Set Total Losses", value=0, step=1)
-                    
-                    c3, c4 = st.columns(2)
-                    if c3.button("💾 Save Score Override", type="primary"):
-                        if existing.exists:
-                            adj_ref.update({'adj_w': adj_w, 'adj_l': adj_l})
-                        else:
-                            adj_ref.set({'username': adj_user, 'tournament': l_tourney, 'adj_w': adj_w, 'adj_l': adj_l})
-                        st.success(f"Score explicitly set to {adj_w} W / {adj_l} L for {adj_user}.")
-                        st.rerun()
-                        
-                    if c4.button("🧹 Clear User Override"):
-                        if existing.exists:
-                            adj_ref.delete()
-                            st.success("Override cleared.")
-                            st.rerun()
+            else:
+                st.info("No tournaments available.")
 
         # Tab 5: MANAGE USERS
         with h_tabs[4]:
@@ -417,7 +386,6 @@ else:
                     
                     with st.container(height=600):
                         for m_sel, m_data in sorted_matches:
-                            # Hide the match number from the user!
                             clean_name = format_match_name(m_sel)
                             
                             st.markdown(f"### **{clean_name}**")
