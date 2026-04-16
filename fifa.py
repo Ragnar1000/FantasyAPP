@@ -21,6 +21,12 @@ def get_tournaments():
     docs = db.collection('tournaments').stream()
     return sorted([doc.id for doc in docs])
 
+# UI Helper: Strips "Match X: " from the display name so users don't see wrong numbers
+def format_match_name(m_id):
+    if m_id.startswith("Match ") and ": " in m_id:
+        return m_id.split(": ", 1)[1]
+    return m_id
+
 # --- 2. SESSION STATE ---
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
@@ -139,7 +145,7 @@ else:
             else:
                 tourney = st.selectbox("Select Tournament", active_tournaments)
                 
-                m_num = st.number_input("Match Number", min_value=1, step=1)
+                m_num = st.number_input("Match Number (Hidden from Users)", min_value=1, step=1)
                 t1 = st.text_input("Team 1").strip()
                 t2 = st.text_input("Team 2").strip()
                 d_date = st.date_input("Deadline Date")
@@ -158,7 +164,7 @@ else:
                                 'tournament': tourney, 'team1': t1, 'team2': t2, 
                                 'match_number': m_num, 'winner': "PENDING", 'deadline': dt
                             })
-                            st.success(f"'{match_name}' saved successfully!")
+                            st.success(f"'{format_match_name(match_name)}' saved successfully!")
                             st.rerun()
                     else:
                         st.error("Please enter both team names.")
@@ -180,7 +186,6 @@ else:
                     else:
                         locked_list.append(data)
                 
-                # Chronological sorting restored
                 pending_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']))
                 locked_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']), reverse=True)
                 
@@ -190,8 +195,9 @@ else:
                     with manage_tabs[0]:
                         for m_data in pending_list:
                             m_name = m_data['match_id']
+                            clean_name = format_match_name(m_name)
                             dead = datetime.fromisoformat(m_data['deadline'])
-                            st.write(f"**{m_name}** | Deadline: {dead.strftime('%b %d, %I:%M %p')}")
+                            st.write(f"**{clean_name}** | Deadline: {dead.strftime('%b %d, %I:%M %p')}")
                             
                             col1, col2 = st.columns([2, 1])
                             win = col1.selectbox("Winner", [m_data['team1'], m_data['team2']], key=f"host_win_{m_name}", label_visibility="collapsed")
@@ -203,10 +209,11 @@ else:
                     with manage_tabs[1]:
                         for m_data in pending_list:
                             m_name = m_data['match_id']
+                            clean_name = format_match_name(m_name)
                             dead = datetime.fromisoformat(m_data['deadline'])
                             
                             col1, col2 = st.columns([2, 1])
-                            col1.write(f"**{m_name}** | {dead.strftime('%b %d, %I:%M %p')}")
+                            col1.write(f"**{clean_name}** | {dead.strftime('%b %d, %I:%M %p')}")
                             
                             if col2.button("Delete Match", key=f"host_del_{m_name}"):
                                 db.collection('matches').document(m_name).delete()
@@ -221,10 +228,11 @@ else:
                     st.subheader("🔒 Locked Matches (Completed)")
                     for m_data in locked_list:
                         m_name = m_data['match_id']
+                        clean_name = format_match_name(m_name)
                         win = m_data['winner']
                         
                         c1, c2, c3 = st.columns([2, 1, 1])
-                        c1.write(f"**{m_name}** | Winner: **{win}**")
+                        c1.write(f"**{clean_name}** | Winner: **{win}**")
                         
                         if c2.button("🔓 Unlock", key=f"unlock_{m_name}"):
                             db.collection('matches').document(m_name).update({'winner': 'PENDING'})
@@ -255,9 +263,15 @@ else:
                 
                 if m_list:
                     m_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']))
-                    match_options = [m['match_id'] for m in m_list]
+                    # Clean the names for the dropdown menu
+                    match_options = {m['match_id']: format_match_name(m['match_id']) for m in m_list}
                     
-                    pick_m_sel = st.selectbox("Select Match", match_options, key="host_picks_m")
+                    pick_m_sel = st.selectbox(
+                        "Select Match", 
+                        options=list(match_options.keys()), 
+                        format_func=lambda x: match_options[x],
+                        key="host_picks_m"
+                    )
                     
                     picks = db.collection('predictions').where('match_name', '==', pick_m_sel).stream()
                     picks_data = [p.to_dict() for p in picks]
@@ -289,7 +303,6 @@ else:
                         if guess == completed[match]: scores[user]['W'] += 1
                         else: scores[user]['L'] += 1
                         
-                # ---> RESTORED THE MATH TO READ YOUR MANUAL OVERRIDES <---
                 adj_docs = db.collection('leaderboard_adjustments').where('tournament', '==', l_tourney).stream()
                 for adj in adj_docs:
                     data = adj.to_dict()
@@ -302,7 +315,6 @@ else:
                     sorted_scores = sorted([{"Player": k, "Wins": v['W'], "Losses": v['L']} for k, v in scores.items()], key=lambda x: x['Wins'], reverse=True)
                     st.table(sorted_scores)
                 else:
-                    # Show empty manual scores if no matches exist yet
                     st.info("No automatic points detected. Showing manual override scores:")
                     all_u = [u.id for u in db.collection('users').stream() if u.id != 'admin']
                     manual_scores = []
@@ -401,12 +413,14 @@ else:
                 else:
                     st.info(f"You have {len(available_matches)} match(es) left to predict in {p_tourney}.")
                     
-                    # Sort open predictions chronologically by deadline
                     sorted_matches = sorted(available_matches.items(), key=lambda x: datetime.fromisoformat(x[1]['deadline']))
                     
                     with st.container(height=600):
                         for m_sel, m_data in sorted_matches:
-                            st.markdown(f"### **{m_sel}**")
+                            # Hide the match number from the user!
+                            clean_name = format_match_name(m_sel)
+                            
+                            st.markdown(f"### **{clean_name}**")
                             dead = datetime.fromisoformat(m_data['deadline'])
                             st.write(f"Deadline: **{dead.strftime('%b %d, %I:%M %p')}**")
                             
@@ -444,7 +458,6 @@ else:
                         if guess == completed[match]: scores[user]['W'] += 1
                         else: scores[user]['L'] += 1
                         
-                # ---> RESTORED MATH FOR USERS TO SEE THE OVERRIDES TOO <---
                 adj_docs = db.collection('leaderboard_adjustments').where('tournament', '==', user_l_tourney).stream()
                 for adj in adj_docs:
                     data = adj.to_dict()
@@ -486,7 +499,6 @@ else:
                         else:
                             locked_picks.append((h, m_info))
                 
-                # Sorted strictly by deadline chronologically
                 editable_picks.sort(key=lambda x: datetime.fromisoformat(x[1]['deadline']))
                 
                 if editable_picks:
@@ -494,9 +506,10 @@ else:
                     st.info("You can change these picks until the match deadline.")
                     for h, m_info in editable_picks:
                         m_name = h['match_name']
+                        clean_name = format_match_name(m_name)
                         dead = datetime.fromisoformat(m_info['deadline'])
                         
-                        with st.expander(f"{m_name} (Deadline: {dead.strftime('%b %d, %I:%M %p')})"):
+                        with st.expander(f"{clean_name} (Deadline: {dead.strftime('%b %d, %I:%M %p')})"):
                             st.write(f"Current Pick: **{h['user_guess']}**")
                             options = [m_info['team1'], m_info['team2']]
                             curr_idx = options.index(h['user_guess']) if h['user_guess'] in options else 0
@@ -514,8 +527,10 @@ else:
                     for h, m_info in locked_picks:
                         actual_winner = m_info.get('winner', 'PENDING')
                         status = "⏳ Locked (Awaiting Result)" if actual_winner == 'PENDING' else ("✅ Won" if h['user_guess'] == actual_winner else "❌ Lost")
+                        
+                        clean_name = format_match_name(h['match_name'])
                         table_data.append({
-                            "Tournament": h['tournament'], "Match": h['match_name'], 
+                            "Tournament": h['tournament'], "Match": clean_name, 
                             "Your Pick": h['user_guess'], "Status": status
                         })
                     st.table(table_data)
