@@ -98,21 +98,39 @@ else:
             st.divider()
             
             st.subheader("Step 2: Fix Corrupted Matches")
-            st.info("Here is EVERY match in your database. Find the old match that lost its winner and click the button for the team that won. If a match is a glitch, click Delete.")
+            st.info("Here is EVERY match in your database with its original Deadline. Find the old match that lost its winner and click the button for the team that won. If a match is a glitch, click Delete.")
             
             all_matches = db.collection('matches').stream()
             matches_exist = False
             
+            # Put them in a list so we can sort them by deadline to make finding them easier
+            all_match_list = []
             for doc in all_matches:
+                d = doc.to_dict()
+                d['id'] = doc.id
+                all_match_list.append(d)
+                
+            # Sort by deadline so the oldest matches are at the top
+            all_match_list.sort(key=lambda x: datetime.fromisoformat(x.get('deadline', datetime.now(PKT).isoformat())))
+            
+            for data in all_match_list:
                 matches_exist = True
-                data = doc.to_dict()
-                m_id = doc.id
+                m_id = data['id']
                 status = data.get('winner', 'PENDING')
                 t1 = data.get('team1', 'Team 1')
                 t2 = data.get('team2', 'Team 2')
                 
+                # Extract and format the deadline so you can see exactly when this match was for
+                try:
+                    dead = datetime.fromisoformat(data['deadline'])
+                    dead_str = dead.strftime('%b %d, %Y - %I:%M %p')
+                except:
+                    dead_str = "Unknown Time"
+                
                 with st.container(border=True):
                     st.write(f"### Match: `{m_id}`")
+                    st.write(f"🕒 **Original Deadline:** {dead_str}")
+                    
                     if status == "PENDING":
                         st.warning("Status: ⏳ PENDING")
                     else:
