@@ -139,17 +139,12 @@ else:
                 st.error("Please create a tournament first!")
             else:
                 tourney = st.selectbox("Select Tournament", active_tournaments)
-                t1, t2 = st.text_input("Team 1"), st.text_input("Team 2")
+                t1, t2 = st.text_input("Team 1").strip(), st.text_input("Team 2").strip()
                 d_date = st.date_input("Deadline Date")
                 d_time = st.time_input("Deadline Time (PKT)")
                 
                 if st.button("Save Match"):
-                    st.session_state['confirm_save_m'] = True
-                    
-                if st.session_state.get('confirm_save_m', False):
-                    st.warning("Confirm creating this match?")
-                    c1, c2 = st.columns(2)
-                    if c1.button("Yes", key="yes_cm"):
+                    if t1 and t2:
                         dt = datetime.combine(d_date, d_time).replace(tzinfo=PKT).isoformat()
                         date_str = d_date.strftime('%b %d')
                         match_name = f"{t1} vs {t2} ({date_str})"
@@ -158,27 +153,30 @@ else:
                             'tournament': tourney, 'team1': t1, 'team2': t2, 
                             'winner': "PENDING", 'deadline': dt
                         })
-                        st.session_state['confirm_save_m'] = False
-                        st.success("Match saved!")
+                        st.success(f"Match '{match_name}' saved!")
                         st.rerun()
-                    if c2.button("No", key="no_cm"):
-                        st.session_state['confirm_save_m'] = False
-                        st.rerun()
+                    else:
+                        st.error("Please enter both team names.")
             
             st.divider()
-            st.subheader("Manage Existing Matches")
+            st.subheader("Manage Pending Matches")
             if active_tournaments:
                 m_tourney = st.selectbox("Select Tournament to Manage", active_tournaments, key="manage_t")
                 
-                pending_docs = db.collection('matches').where('tournament', '==', m_tourney).where('winner', '==', 'PENDING').stream()
-                
+                all_m_docs = db.collection('matches').where('tournament', '==', m_tourney).stream()
                 pending_list = []
-                for doc in pending_docs:
+                locked_list = []
+                
+                for doc in all_m_docs:
                     data = doc.to_dict()
                     data['match_id'] = doc.id
-                    pending_list.append(data)
+                    if data.get('winner') == 'PENDING':
+                        pending_list.append(data)
+                    else:
+                        locked_list.append(data)
                 
                 pending_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']))
+                locked_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']), reverse=True)
                 
                 if pending_list:
                     manage_tabs = st.tabs(["🏆 Set Winners", "🗑️ Delete Matches"])
@@ -193,18 +191,8 @@ else:
                             win = col1.selectbox("Winner", [m_data['team1'], m_data['team2']], key=f"host_win_{m_name}", label_visibility="collapsed")
                             
                             if col2.button("Lock Winner", key=f"host_btn_{m_name}"):
-                                st.session_state[f'confirm_lock_{m_name}'] = True
-                                
-                            if st.session_state.get(f'confirm_lock_{m_name}', False):
-                                st.warning(f"Confirm locking '{win}' as winner for {m_name}?")
-                                c1, c2 = st.columns(2)
-                                if c1.button("Yes", key=f"y_lock_{m_name}"):
-                                    db.collection('matches').document(m_name).update({'winner': win})
-                                    st.session_state[f'confirm_lock_{m_name}'] = False
-                                    st.rerun()
-                                if c2.button("No", key=f"n_lock_{m_name}"):
-                                    st.session_state[f'confirm_lock_{m_name}'] = False
-                                    st.rerun()
+                                db.collection('matches').document(m_name).update({'winner': win})
+                                st.rerun()
                                     
                     with manage_tabs[1]:
                         for m_data in pending_list:
@@ -215,32 +203,45 @@ else:
                             col1.write(f"**{m_name}** | {dead.strftime('%b %d, %I:%M %p')}")
                             
                             if col2.button("Delete Match", key=f"host_del_{m_name}"):
-                                st.session_state[f'confirm_del_m_{m_name}'] = True
-                                
-                            if st.session_state.get(f'confirm_del_m_{m_name}', False):
-                                st.error(f"Confirm deleting '{m_name}'? This wipes user predictions.")
-                                c1, c2 = st.columns(2)
-                                if c1.button("Yes, Delete", key=f"y_del_{m_name}"):
-                                    db.collection('matches').document(m_name).delete()
-                                    preds = db.collection('predictions').where('match_name', '==', m_name).stream()
-                                    for p in preds: p.reference.delete()
-                                    st.session_state[f'confirm_del_m_{m_name}'] = False
-                                    st.rerun()
-                                if c2.button("No, Cancel", key=f"n_del_{m_name}"):
-                                    st.session_state[f'confirm_del_m_{m_name}'] = False
-                                    st.rerun()
+                                db.collection('matches').document(m_name).delete()
+                                preds = db.collection('predictions').where('match_name', '==', m_name).stream()
+                                for p in preds: p.reference.delete()
+                                st.rerun()
                 else:
-                    st.info("No pending matches to manage for this tournament.")
+                    st.info("No pending matches.")
 
-        # Tab 3: Player Picks (DIAGNOSTIC MODE: SHOWS EVERYTHING)
+                st.divider()
+                st.subheader("🔒 Locked Matches (Completed)")
+                if locked_list:
+                    for m_data in locked_list:
+                        m_name = m_data['match_id']
+                        win = m_data['winner']
+                        
+                        c1, c2, c3 = st.columns([2, 1, 1])
+                        c1.write(f"**{m_name}** | Winner: **{win}**")
+                        
+                        if c2.button("🔓 Unlock", key=f"unlock_{m_name}"):
+                            db.collection('matches').document(m_name).update({'winner': 'PENDING'})
+                            st.rerun()
+                            
+                        if c3.button("🗑️ Delete", key=f"del_lock_{m_name}"):
+                            db.collection('matches').document(m_name).delete()
+                            preds = db.collection('predictions').where('match_name', '==', m_name).stream()
+                            for p in preds: p.reference.delete()
+                            st.rerun()
+                else:
+                    st.info("No locked matches.")
+            else:
+                st.info("No tournaments available.")
+
+        # Tab 3: Player Picks (GOD MODE)
         with h_tabs[2]:
-            st.subheader("Database Viewer: All Matches")
+            st.subheader("Database Viewer & Override")
             if not active_tournaments:
                 st.info("No tournaments available.")
             else:
                 view_tourney = st.radio("Select Tournament", active_tournaments, horizontal=True, key="host_picks_t")
                 
-                # REMOVED the 'PENDING' filter so you can see EVERY match in the database
                 m_docs = db.collection('matches').where('tournament', '==', view_tourney).stream()
                 m_list = []
                 for doc in m_docs:
@@ -252,14 +253,14 @@ else:
                     m_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']))
                     match_options = [m['match_id'] for m in m_list]
                     
-                    pick_m_sel = st.selectbox("Select Match to Check Data", match_options, key="host_picks_m")
+                    pick_m_sel = st.selectbox("Select Any Match", match_options, key="host_picks_m")
                     
                     sel_m_data = next((m for m in m_list if m['match_id'] == pick_m_sel), None)
                     if sel_m_data:
                         if sel_m_data.get('winner') != 'PENDING':
-                            st.success(f"✅ Match is completed. Winner locked as: **{sel_m_data['winner']}**")
+                            st.success(f"✅ Match is Locked. Winner: **{sel_m_data['winner']}**")
                         else:
-                            st.info("⏳ Match is currently PENDING.")
+                            st.info("⏳ Match is Pending.")
                     
                     picks = db.collection('predictions').where('match_name', '==', pick_m_sel).stream()
                     picks_data = [p.to_dict() for p in picks]
@@ -267,11 +268,44 @@ else:
                     if picks_data:
                         st.table([{"Player": p['username'], "Their Pick": p['user_guess']} for p in picks_data])
                     else:
-                        st.error("No predictions exist in the database for this match!")
+                        st.warning("No predictions exist for this match.")
+                        
+                    st.divider()
+                    st.subheader("🛠️ Manual Override")
+                    users = [u.id for u in db.collection('users').stream()]
+                    if users:
+                        sel_user = st.selectbox("Select User", users, key="override_u")
+                        
+                        if sel_m_data:
+                            override_pick = st.radio("Select Team", [sel_m_data['team1'], sel_m_data['team2']], key="override_pick")
+                            
+                            c1, c2 = st.columns(2)
+                            if c1.button("Save / Update Pick"):
+                                existing_preds = list(db.collection('predictions').where('username', '==', sel_user).where('match_name', '==', pick_m_sel).stream())
+                                if existing_preds:
+                                    for doc in existing_preds:
+                                        doc.reference.update({'user_guess': override_pick})
+                                else:
+                                    db.collection('predictions').add({
+                                        'username': sel_user,
+                                        'match_name': pick_m_sel,
+                                        'user_guess': override_pick,
+                                        'tournament': view_tourney
+                                    })
+                                st.rerun()
+                                
+                            if c2.button("🗑️ Delete Pick"):
+                                existing_preds = list(db.collection('predictions').where('username', '==', sel_user).where('match_name', '==', pick_m_sel).stream())
+                                if existing_preds:
+                                    for doc in existing_preds:
+                                        doc.reference.delete()
+                                    st.rerun()
+                                else:
+                                    st.error("No pick to delete.")
                 else:
-                    st.warning("No matches found in the database for this tournament at all.")
+                    st.info("No matches found.")
 
-        # Tab 4: HOST LEADERBOARD
+        # Tab 4: HOST LEADERBOARD (WITH CORRECTION RESET)
         with h_tabs[3]:
             st.subheader("Current Rankings")
             if active_tournaments:
@@ -291,7 +325,6 @@ else:
                         if guess == completed[match]: scores[user]['W'] += 1
                         else: scores[user]['L'] += 1
                         
-                # Read manual adjustments in case any exist
                 adj_docs = db.collection('leaderboard_adjustments').where('tournament', '==', l_tourney).stream()
                 for adj in adj_docs:
                     data = adj.to_dict()
@@ -305,6 +338,38 @@ else:
                     st.table(sorted_scores)
                 else:
                     st.info(f"No completed matches for {l_tourney} yet.")
+
+                st.divider()
+                st.subheader("🛠️ Leaderboard Fixer")
+                st.info("Use this tool to clear any incorrect math you added previously.")
+                
+                all_users = [u.id for u in db.collection('users').stream() if u.id != 'admin']
+                if all_users:
+                    adj_user = st.selectbox("Select User to Fix", all_users, key="adj_u")
+                    
+                    adj_ref = db.collection('leaderboard_adjustments').document(f"{adj_user}_{l_tourney}")
+                    existing = adj_ref.get()
+                    curr_w = existing.to_dict().get('adj_w', 0) if existing.exists else 0
+                    curr_l = existing.to_dict().get('adj_l', 0) if existing.exists else 0
+                    
+                    st.write(f"Hidden Adjustment currently applied: **{curr_w} Wins**, **{curr_l} Losses**")
+                    
+                    c1, c2, c3 = st.columns(3)
+                    adj_w = c1.number_input("Add/Sub Wins", value=0, step=1)
+                    adj_l = c2.number_input("Add/Sub Losses", value=0, step=1)
+                    
+                    if c1.button("Apply Math"):
+                        if existing.exists:
+                            adj_ref.update({'adj_w': curr_w + adj_w, 'adj_l': curr_l + adj_l})
+                        else:
+                            adj_ref.set({'username': adj_user, 'tournament': l_tourney, 'adj_w': adj_w, 'adj_l': adj_l})
+                        st.rerun()
+                        
+                    if c3.button("🧹 Reset to Zero (Clear Error)"):
+                        if existing.exists:
+                            adj_ref.delete()
+                        st.success("Cleared! The leaderboard is now showing the true database score.")
+                        st.rerun()
 
         # Tab 5: MANAGE USERS
         with h_tabs[4]:
