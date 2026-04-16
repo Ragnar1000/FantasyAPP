@@ -151,9 +151,6 @@ else:
                     c1, c2 = st.columns(2)
                     if c1.button("Yes", key="yes_cm"):
                         dt = datetime.combine(d_date, d_time).replace(tzinfo=PKT).isoformat()
-                        
-                        # --- THE BUG FIX ---
-                        # Append the date to the match name to ensure uniqueness (e.g., "Team A vs Team B (Mar 26)")
                         date_str = d_date.strftime('%b %d')
                         match_name = f"{t1} vs {t2} ({date_str})"
                         
@@ -235,16 +232,16 @@ else:
                 else:
                     st.info("No pending matches to manage for this tournament.")
 
-        # Tab 3: Player Picks
+        # Tab 3: Player Picks (DIAGNOSTIC MODE: SHOWS EVERYTHING)
         with h_tabs[2]:
-            st.subheader("Player Predictions by Match")
+            st.subheader("Database Viewer: All Matches")
             if not active_tournaments:
                 st.info("No tournaments available.")
             else:
                 view_tourney = st.radio("Select Tournament", active_tournaments, horizontal=True, key="host_picks_t")
                 
-                # Fetch ONLY pending matches
-                m_docs = db.collection('matches').where('tournament', '==', view_tourney).where('winner', '==', 'PENDING').stream()
+                # REMOVED the 'PENDING' filter so you can see EVERY match in the database
+                m_docs = db.collection('matches').where('tournament', '==', view_tourney).stream()
                 m_list = []
                 for doc in m_docs:
                     d = doc.to_dict()
@@ -255,15 +252,14 @@ else:
                     m_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']))
                     match_options = [m['match_id'] for m in m_list]
                     
-                    pick_m_sel = st.selectbox("Select Pending Match", match_options, key="host_picks_m")
+                    pick_m_sel = st.selectbox("Select Match to Check Data", match_options, key="host_picks_m")
                     
                     sel_m_data = next((m for m in m_list if m['match_id'] == pick_m_sel), None)
                     if sel_m_data:
-                        dead = datetime.fromisoformat(sel_m_data['deadline'])
-                        if datetime.now(PKT) > dead:
-                            st.warning(f"⚠️ **Deadline Passed ({dead.strftime('%I:%M %p')}).** Match is locked.")
+                        if sel_m_data.get('winner') != 'PENDING':
+                            st.success(f"✅ Match is completed. Winner locked as: **{sel_m_data['winner']}**")
                         else:
-                            st.info(f"⏳ Match is open until {dead.strftime('%b %d, %I:%M %p')}.")
+                            st.info("⏳ Match is currently PENDING.")
                     
                     picks = db.collection('predictions').where('match_name', '==', pick_m_sel).stream()
                     picks_data = [p.to_dict() for p in picks]
@@ -271,9 +267,9 @@ else:
                     if picks_data:
                         st.table([{"Player": p['username'], "Their Pick": p['user_guess']} for p in picks_data])
                     else:
-                        st.info("No predictions made for this match yet.")
+                        st.error("No predictions exist in the database for this match!")
                 else:
-                    st.success("No pending matches left in this tournament! (Completed matches are hidden).")
+                    st.warning("No matches found in the database for this tournament at all.")
 
         # Tab 4: HOST LEADERBOARD
         with h_tabs[3]:
