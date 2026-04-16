@@ -230,7 +230,7 @@ else:
                 else:
                     st.info("No pending matches to manage for this tournament.")
 
-        # Tab 3: Player Picks
+        # Tab 3: Player Picks (RESTORED MANUAL OVERRIDE)
         with h_tabs[2]:
             st.subheader("Player Predictions by Match")
             if not active_tournaments:
@@ -256,7 +256,7 @@ else:
                     if sel_m_data:
                         dead = datetime.fromisoformat(sel_m_data['deadline'])
                         if datetime.now(PKT) > dead:
-                            st.warning(f"⚠️ **Deadline Passed ({dead.strftime('%I:%M %p')}).** Match is locked.")
+                            st.warning(f"⚠️ **Deadline Passed ({dead.strftime('%I:%M %p')}).** Match is locked for users, but YOU can still override picks.")
                         else:
                             st.info(f"⏳ Match is open until {dead.strftime('%b %d, %I:%M %p')}.")
                     
@@ -267,6 +267,45 @@ else:
                         st.table([{"Player": p['username'], "Their Pick": p['user_guess']} for p in picks_data])
                     else:
                         st.info("No predictions made for this match yet.")
+                        
+                    st.divider()
+                    st.subheader("🛠️ Manual Override")
+                    st.info("As the Host, you can submit, change, or delete a pick on behalf of any user, even if the deadline has passed.")
+                    
+                    users = [u.id for u in db.collection('users').stream() if u.id != 'admin']
+                    if users:
+                        sel_user = st.selectbox("Select User", users, key="override_u")
+                        
+                        if sel_m_data:
+                            override_pick = st.radio("Select Team", [sel_m_data['team1'], sel_m_data['team2']], key="override_pick")
+                            
+                            c1, c2 = st.columns(2)
+                            if c1.button("Save / Update Pick"):
+                                existing_preds = list(db.collection('predictions').where('username', '==', sel_user).where('match_name', '==', pick_m_sel).stream())
+                                if existing_preds:
+                                    for doc in existing_preds:
+                                        doc.reference.update({'user_guess': override_pick})
+                                else:
+                                    db.collection('predictions').add({
+                                        'username': sel_user,
+                                        'match_name': pick_m_sel,
+                                        'user_guess': override_pick,
+                                        'tournament': view_tourney
+                                    })
+                                st.success(f"Successfully updated pick for {sel_user}!")
+                                st.rerun()
+                                
+                            if c2.button("🗑️ Delete Pick"):
+                                existing_preds = list(db.collection('predictions').where('username', '==', sel_user).where('match_name', '==', pick_m_sel).stream())
+                                if existing_preds:
+                                    for doc in existing_preds:
+                                        doc.reference.delete()
+                                    st.success(f"Deleted pick for {sel_user}!")
+                                    st.rerun()
+                                else:
+                                    st.warning("This user hasn't made a pick for this match.")
+                    else:
+                        st.warning("No users registered.")
                 else:
                     st.success("No pending matches left in this tournament! (Completed matches are hidden).")
 
@@ -290,7 +329,7 @@ else:
                         if guess == completed[match]: scores[user]['W'] += 1
                         else: scores[user]['L'] += 1
                         
-                # Read manual adjustments in case any exist, so the host doesn't lose the corrections they just made
+                # Read manual adjustments in case any exist
                 adj_docs = db.collection('leaderboard_adjustments').where('tournament', '==', l_tourney).stream()
                 for adj in adj_docs:
                     data = adj.to_dict()
@@ -395,7 +434,7 @@ else:
                         if guess == completed[match]: scores[user]['W'] += 1
                         else: scores[user]['L'] += 1
                         
-                # Factor in the adjustments you previously made
+                # Factor in adjustments
                 adj_docs = db.collection('leaderboard_adjustments').where('tournament', '==', user_l_tourney).stream()
                 for adj in adj_docs:
                     data = adj.to_dict()
