@@ -151,7 +151,12 @@ else:
                     c1, c2 = st.columns(2)
                     if c1.button("Yes", key="yes_cm"):
                         dt = datetime.combine(d_date, d_time).replace(tzinfo=PKT).isoformat()
-                        match_name = f"{t1} vs {t2}"
+                        
+                        # --- THE BUG FIX ---
+                        # Append the date to the match name to ensure uniqueness (e.g., "Team A vs Team B (Mar 26)")
+                        date_str = d_date.strftime('%b %d')
+                        match_name = f"{t1} vs {t2} ({date_str})"
+                        
                         db.collection('matches').document(match_name).set({
                             'tournament': tourney, 'team1': t1, 'team2': t2, 
                             'winner': "PENDING", 'deadline': dt
@@ -230,7 +235,7 @@ else:
                 else:
                     st.info("No pending matches to manage for this tournament.")
 
-        # Tab 3: Player Picks (Overrides removed completely)
+        # Tab 3: Player Picks
         with h_tabs[2]:
             st.subheader("Player Predictions by Match")
             if not active_tournaments:
