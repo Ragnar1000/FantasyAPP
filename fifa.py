@@ -152,22 +152,32 @@ else:
                 d_time = st.time_input("Deadline Time (PKT)")
                 
                 if st.button("Save Match"):
+                    st.session_state['confirm_save_match'] = True
+                    
+                if st.session_state.get('confirm_save_match', False):
                     if t1 and t2:
-                        dt = datetime.combine(d_date, d_time).replace(tzinfo=PKT).isoformat()
                         match_name = f"Match {m_num}: {t1} vs {t2}"
-                        
-                        doc_ref = db.collection('matches').document(match_name)
-                        if doc_ref.get().exists:
-                            st.error(f"'{match_name}' already exists! Please use a different Match Number.")
-                        else:
-                            doc_ref.set({
-                                'tournament': tourney, 'team1': t1, 'team2': t2, 
-                                'match_number': m_num, 'winner': "PENDING", 'deadline': dt
-                            })
-                            st.success(f"'{format_match_name(match_name)}' saved successfully!")
+                        st.warning(f"Are you sure you want to create '{format_match_name(match_name)}'?")
+                        c1, c2 = st.columns(2)
+                        if c1.button("Yes, Save Match", key="y_sm"):
+                            dt = datetime.combine(d_date, d_time).replace(tzinfo=PKT).isoformat()
+                            doc_ref = db.collection('matches').document(match_name)
+                            if doc_ref.get().exists:
+                                st.error(f"'{match_name}' already exists! Please use a different Match Number.")
+                            else:
+                                doc_ref.set({
+                                    'tournament': tourney, 'team1': t1, 'team2': t2, 
+                                    'match_number': m_num, 'winner': "PENDING", 'deadline': dt
+                                })
+                                st.session_state['confirm_save_match'] = False
+                                st.success("Match saved successfully!")
+                                st.rerun()
+                        if c2.button("Cancel", key="n_sm"):
+                            st.session_state['confirm_save_match'] = False
                             st.rerun()
                     else:
-                        st.error("Please enter both team names.")
+                        st.error("Please enter both team names before saving.")
+                        st.session_state['confirm_save_match'] = False
 
             st.divider()
             st.subheader("Manage Matches")
@@ -203,8 +213,18 @@ else:
                             win = col1.selectbox("Winner", [m_data['team1'], m_data['team2']], key=f"host_win_{m_name}", label_visibility="collapsed")
                             
                             if col2.button("Lock Winner", key=f"host_btn_{m_name}"):
-                                db.collection('matches').document(m_name).update({'winner': win})
-                                st.rerun()
+                                st.session_state[f'confirm_lock_{m_name}'] = True
+                                
+                            if st.session_state.get(f'confirm_lock_{m_name}', False):
+                                st.warning(f"Confirm locking '{win}' as the final winner for {clean_name}?")
+                                c1, c2 = st.columns(2)
+                                if c1.button("Yes, Lock", key=f"y_l_{m_name}"):
+                                    db.collection('matches').document(m_name).update({'winner': win})
+                                    st.session_state[f'confirm_lock_{m_name}'] = False
+                                    st.rerun()
+                                if c2.button("Cancel", key=f"n_l_{m_name}"):
+                                    st.session_state[f'confirm_lock_{m_name}'] = False
+                                    st.rerun()
                                     
                     with manage_tabs[1]:
                         for m_data in pending_list:
@@ -216,10 +236,20 @@ else:
                             col1.write(f"**{clean_name}** | {dead.strftime('%b %d, %I:%M %p')}")
                             
                             if col2.button("Delete Match", key=f"host_del_{m_name}"):
-                                db.collection('matches').document(m_name).delete()
-                                preds = db.collection('predictions').where('match_name', '==', m_name).stream()
-                                for p in preds: p.reference.delete()
-                                st.rerun()
+                                st.session_state[f'confirm_del_{m_name}'] = True
+                                
+                            if st.session_state.get(f'confirm_del_{m_name}', False):
+                                st.error(f"Are you sure you want to permanently delete {clean_name}?")
+                                c1, c2 = st.columns(2)
+                                if c1.button("Yes, Delete", key=f"y_d_{m_name}"):
+                                    db.collection('matches').document(m_name).delete()
+                                    preds = db.collection('predictions').where('match_name', '==', m_name).stream()
+                                    for p in preds: p.reference.delete()
+                                    st.session_state[f'confirm_del_{m_name}'] = False
+                                    st.rerun()
+                                if c2.button("Cancel", key=f"n_d_{m_name}"):
+                                    st.session_state[f'confirm_del_{m_name}'] = False
+                                    st.rerun()
                 else:
                     st.info("No pending matches.")
 
@@ -235,14 +265,34 @@ else:
                         c1.write(f"**{clean_name}** | Winner: **{win}**")
                         
                         if c2.button("🔓 Unlock", key=f"unlock_{m_name}"):
-                            db.collection('matches').document(m_name).update({'winner': 'PENDING'})
-                            st.rerun()
+                            st.session_state[f'confirm_unlock_{m_name}'] = True
+                            
+                        if st.session_state.get(f'confirm_unlock_{m_name}', False):
+                            st.warning(f"Are you sure you want to set {clean_name} back to Pending?")
+                            cc1, cc2 = st.columns(2)
+                            if cc1.button("Yes, Unlock", key=f"y_u_{m_name}"):
+                                db.collection('matches').document(m_name).update({'winner': 'PENDING'})
+                                st.session_state[f'confirm_unlock_{m_name}'] = False
+                                st.rerun()
+                            if cc2.button("Cancel", key=f"n_u_{m_name}"):
+                                st.session_state[f'confirm_unlock_{m_name}'] = False
+                                st.rerun()
                             
                         if c3.button("🗑️ Delete", key=f"del_lock_{m_name}"):
-                            db.collection('matches').document(m_name).delete()
-                            preds = db.collection('predictions').where('match_name', '==', m_name).stream()
-                            for p in preds: p.reference.delete()
-                            st.rerun()
+                            st.session_state[f'confirm_del_l_{m_name}'] = True
+                            
+                        if st.session_state.get(f'confirm_del_l_{m_name}', False):
+                            st.error(f"Permanently delete {clean_name} and all its predictions?")
+                            cc1, cc2 = st.columns(2)
+                            if cc1.button("Yes, Delete", key=f"y_dl_{m_name}"):
+                                db.collection('matches').document(m_name).delete()
+                                preds = db.collection('predictions').where('match_name', '==', m_name).stream()
+                                for p in preds: p.reference.delete()
+                                st.session_state[f'confirm_del_l_{m_name}'] = False
+                                st.rerun()
+                            if cc2.button("Cancel", key=f"n_dl_{m_name}"):
+                                st.session_state[f'confirm_del_l_{m_name}'] = False
+                                st.rerun()
             else:
                 st.info("No tournaments available.")
 
@@ -315,7 +365,6 @@ else:
                     sorted_scores = sorted([{"Player": k, "Wins": v['W'], "Losses": v['L']} for k, v in scores.items()], key=lambda x: x['Wins'], reverse=True)
                     st.table(sorted_scores)
                 else:
-                    # Show manual scores even if no matches exist yet
                     st.info("No automatic points detected. Showing current scores:")
                     all_u = [u.id for u in db.collection('users').stream() if u.id != 'admin']
                     manual_scores = []
