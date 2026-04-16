@@ -87,30 +87,39 @@ else:
         with h_tabs[0]:
             st.error("🚨 EMERGENCY DATABASE CLEANUP 🚨")
             
-            st.subheader("Step 1: Wipe Bad Math")
-            st.info("This will delete all manual point corrections and force the leaderboard to calculate from real match data only.")
-            if st.button("🧹 Click Here to Wipe All Manual Leaderboard Corrections", type="primary"):
+            st.subheader("Step 1: Nuclear Leaderboard Reset")
+            st.info("This will set EVERY match back to 'PENDING'. This instantly drops everyone's score back to 0 without deleting their actual predictions.")
+            if st.button("☢️ Reset All Matches to Pending (Zero Out Scores)", type="primary"):
+                all_m = db.collection('matches').stream()
+                for m in all_m:
+                    m.reference.update({'winner': 'PENDING'})
+                st.success("✅ All matches set to Pending. Leaderboard is now at 0.")
+                st.rerun()
+            
+            st.divider()
+            
+            st.subheader("Step 2: Wipe Bad Math")
+            st.info("This will delete any manual +1 or -1 point corrections you typed in earlier.")
+            if st.button("🧹 Click Here to Wipe Manual Leaderboard Corrections"):
                 adj_docs = db.collection('leaderboard_adjustments').stream()
                 for doc in adj_docs:
                     doc.reference.delete()
-                st.success("✅ All manual math wiped! The leaderboard is completely reset.")
+                st.success("✅ All manual math wiped!")
                 
             st.divider()
             
-            st.subheader("Step 2: Fix Corrupted Matches")
-            st.info("Here is EVERY match in your database with its original Deadline. Find the old match that lost its winner and click the button for the team that won. If a match is a glitch, click Delete.")
+            st.subheader("Step 3: Database Match Viewer")
+            st.info("Here is every match currently existing in your database. If a match is not in this list, it was permanently deleted and must be recreated.")
             
             all_matches = db.collection('matches').stream()
             matches_exist = False
             
-            # Put them in a list so we can sort them by deadline to make finding them easier
             all_match_list = []
             for doc in all_matches:
                 d = doc.to_dict()
                 d['id'] = doc.id
                 all_match_list.append(d)
                 
-            # Sort by deadline so the oldest matches are at the top
             all_match_list.sort(key=lambda x: datetime.fromisoformat(x.get('deadline', datetime.now(PKT).isoformat())))
             
             for data in all_match_list:
@@ -120,7 +129,6 @@ else:
                 t1 = data.get('team1', 'Team 1')
                 t2 = data.get('team2', 'Team 2')
                 
-                # Extract and format the deadline so you can see exactly when this match was for
                 try:
                     dead = datetime.fromisoformat(data['deadline'])
                     dead_str = dead.strftime('%b %d, %Y - %I:%M %p')
@@ -251,6 +259,15 @@ else:
                         if guess == completed[match]: scores[user]['W'] += 1
                         else: scores[user]['L'] += 1
                         
+                # Read manual adjustments
+                adj_docs = db.collection('leaderboard_adjustments').where('tournament', '==', l_tourney).stream()
+                for adj in adj_docs:
+                    data = adj.to_dict()
+                    u = data['username']
+                    if u not in scores: scores[u] = {'W': 0, 'L': 0}
+                    scores[u]['W'] += data.get('adj_w', 0)
+                    scores[u]['L'] += data.get('adj_l', 0)
+                        
                 if scores:
                     sorted_scores = sorted([{"Player": k, "Wins": v['W'], "Losses": v['L']} for k, v in scores.items()], key=lambda x: x['Wins'], reverse=True)
                     st.table(sorted_scores)
@@ -346,6 +363,15 @@ else:
                     if match in completed:
                         if guess == completed[match]: scores[user]['W'] += 1
                         else: scores[user]['L'] += 1
+                        
+                # Factor in adjustments
+                adj_docs = db.collection('leaderboard_adjustments').where('tournament', '==', user_l_tourney).stream()
+                for adj in adj_docs:
+                    data = adj.to_dict()
+                    u = data['username']
+                    if u not in scores: scores[u] = {'W': 0, 'L': 0}
+                    scores[u]['W'] += data.get('adj_w', 0)
+                    scores[u]['L'] += data.get('adj_l', 0)
                         
                 if scores:
                     sorted_scores = sorted([{"User": k, "Wins": v['W'], "Losses": v['L']} for k, v in scores.items()], key=lambda x: x['Wins'], reverse=True)
