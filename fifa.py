@@ -81,7 +81,7 @@ else:
     # ==========================================
     if st.session_state['role'] == "Host":
         st.title("🛠️ Host Dashboard")
-        h_tabs = st.tabs(["🏆 Tournaments", "➕ Manage Matches", "📋 Player Picks", "📊 Leaderboard", "🗑️ Users"])
+        h_tabs = st.tabs(["🏆 Tournaments", "➕ Manage Matches", "📋 Player Picks", "📊 Leaderboard Rebuilder", "🗑️ Users"])
 
         # Tab 1: Manage Tournaments
         with h_tabs[0]:
@@ -139,7 +139,6 @@ else:
             else:
                 tourney = st.selectbox("Select Tournament", active_tournaments)
                 
-                # NEW FEATURE: Match Number
                 m_num = st.number_input("Match Number", min_value=1, step=1)
                 t1 = st.text_input("Team 1").strip()
                 t2 = st.text_input("Team 2").strip()
@@ -149,8 +148,6 @@ else:
                 if st.button("Save Match"):
                     if t1 and t2:
                         dt = datetime.combine(d_date, d_time).replace(tzinfo=PKT).isoformat()
-                        
-                        # Match ID now permanently prevents overwriting (e.g., "Match 1: Lahore vs Karachi")
                         match_name = f"Match {m_num}: {t1} vs {t2}"
                         
                         doc_ref = db.collection('matches').document(match_name)
@@ -183,8 +180,9 @@ else:
                     else:
                         locked_list.append(data)
                 
-                pending_list.sort(key=lambda x: x.get('match_number', 0))
-                locked_list.sort(key=lambda x: x.get('match_number', 0), reverse=True)
+                # Chronological sorting restored
+                pending_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']))
+                locked_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']), reverse=True)
                 
                 if pending_list:
                     manage_tabs = st.tabs(["🏆 Set Winners", "🗑️ Delete Matches"])
@@ -256,7 +254,7 @@ else:
                     m_list.append(d)
                 
                 if m_list:
-                    m_list.sort(key=lambda x: x.get('match_number', 0))
+                    m_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']))
                     match_options = [m['match_id'] for m in m_list]
                     
                     pick_m_sel = st.selectbox("Select Match", match_options, key="host_picks_m")
@@ -271,7 +269,7 @@ else:
                 else:
                     st.warning("No matches currently exist to view.")
 
-        # Tab 4: HOST LEADERBOARD (Clean automated math)
+        # Tab 4: HOST LEADERBOARD (THE REBUILDER IS BACK)
         with h_tabs[3]:
             st.subheader("Current Rankings")
             if active_tournaments:
@@ -291,11 +289,69 @@ else:
                         if guess == completed[match]: scores[user]['W'] += 1
                         else: scores[user]['L'] += 1
                         
+                # ---> RESTORED THE MATH TO READ YOUR MANUAL OVERRIDES <---
+                adj_docs = db.collection('leaderboard_adjustments').where('tournament', '==', l_tourney).stream()
+                for adj in adj_docs:
+                    data = adj.to_dict()
+                    u = data['username']
+                    if u not in scores: scores[u] = {'W': 0, 'L': 0}
+                    scores[u]['W'] += data.get('adj_w', 0)
+                    scores[u]['L'] += data.get('adj_l', 0)
+                        
                 if scores:
                     sorted_scores = sorted([{"Player": k, "Wins": v['W'], "Losses": v['L']} for k, v in scores.items()], key=lambda x: x['Wins'], reverse=True)
                     st.table(sorted_scores)
                 else:
-                    st.info(f"No completed matches for {l_tourney} yet.")
+                    # Show empty manual scores if no matches exist yet
+                    st.info("No automatic points detected. Showing manual override scores:")
+                    all_u = [u.id for u in db.collection('users').stream() if u.id != 'admin']
+                    manual_scores = []
+                    for user in all_u:
+                        w, l = 0, 0
+                        adj_doc = db.collection('leaderboard_adjustments').document(f"{user}_{l_tourney}").get()
+                        if adj_doc.exists:
+                            w = adj_doc.to_dict().get('adj_w', 0)
+                            l = adj_doc.to_dict().get('adj_l', 0)
+                        if w != 0 or l != 0:
+                            manual_scores.append({"Player": user, "Wins": w, "Losses": l})
+                    
+                    if manual_scores:
+                        manual_scores = sorted(manual_scores, key=lambda x: x['Wins'], reverse=True)
+                        st.table(manual_scores)
+
+                st.divider()
+                st.subheader("🛠️ Leaderboard Rebuilder")
+                st.info("Type in exactly how many Wins and Losses a user should have. This will add permanently to their total.")
+                
+                all_users = [u.id for u in db.collection('users').stream() if u.id != 'admin']
+                if all_users:
+                    adj_user = st.selectbox("Select User to Rebuild", all_users, key="adj_u")
+                    
+                    adj_ref = db.collection('leaderboard_adjustments').document(f"{adj_user}_{l_tourney}")
+                    existing = adj_ref.get()
+                    curr_w = existing.to_dict().get('adj_w', 0) if existing.exists else 0
+                    curr_l = existing.to_dict().get('adj_l', 0) if existing.exists else 0
+                    
+                    st.write(f"Current Override for {adj_user}: **{curr_w} Wins**, **{curr_l} Losses**")
+                    
+                    c1, c2 = st.columns(2)
+                    adj_w = c1.number_input("Set Total Wins", value=0, step=1)
+                    adj_l = c2.number_input("Set Total Losses", value=0, step=1)
+                    
+                    c3, c4 = st.columns(2)
+                    if c3.button("💾 Save Score Override", type="primary"):
+                        if existing.exists:
+                            adj_ref.update({'adj_w': adj_w, 'adj_l': adj_l})
+                        else:
+                            adj_ref.set({'username': adj_user, 'tournament': l_tourney, 'adj_w': adj_w, 'adj_l': adj_l})
+                        st.success(f"Score explicitly set to {adj_w} W / {adj_l} L for {adj_user}.")
+                        st.rerun()
+                        
+                    if c4.button("🧹 Clear User Override"):
+                        if existing.exists:
+                            adj_ref.delete()
+                            st.success("Override cleared.")
+                            st.rerun()
 
         # Tab 5: MANAGE USERS
         with h_tabs[4]:
@@ -345,8 +401,8 @@ else:
                 else:
                     st.info(f"You have {len(available_matches)} match(es) left to predict in {p_tourney}.")
                     
-                    # Sort open predictions by match number
-                    sorted_matches = sorted(available_matches.items(), key=lambda x: x[1].get('match_number', 0))
+                    # Sort open predictions chronologically by deadline
+                    sorted_matches = sorted(available_matches.items(), key=lambda x: datetime.fromisoformat(x[1]['deadline']))
                     
                     with st.container(height=600):
                         for m_sel, m_data in sorted_matches:
@@ -388,6 +444,15 @@ else:
                         if guess == completed[match]: scores[user]['W'] += 1
                         else: scores[user]['L'] += 1
                         
+                # ---> RESTORED MATH FOR USERS TO SEE THE OVERRIDES TOO <---
+                adj_docs = db.collection('leaderboard_adjustments').where('tournament', '==', user_l_tourney).stream()
+                for adj in adj_docs:
+                    data = adj.to_dict()
+                    u = data['username']
+                    if u not in scores: scores[u] = {'W': 0, 'L': 0}
+                    scores[u]['W'] += data.get('adj_w', 0)
+                    scores[u]['L'] += data.get('adj_l', 0)
+                        
                 if scores:
                     sorted_scores = sorted([{"User": k, "Wins": v['W'], "Losses": v['L']} for k, v in scores.items()], key=lambda x: x['Wins'], reverse=True)
                     st.table(sorted_scores)
@@ -421,8 +486,8 @@ else:
                         else:
                             locked_picks.append((h, m_info))
                 
-                # Sort profile matches by match number instead of date for cleaner UI
-                editable_picks.sort(key=lambda x: x[1].get('match_number', 0))
+                # Sorted strictly by deadline chronologically
+                editable_picks.sort(key=lambda x: datetime.fromisoformat(x[1]['deadline']))
                 
                 if editable_picks:
                     st.subheader("✏️ Editable Predictions")
