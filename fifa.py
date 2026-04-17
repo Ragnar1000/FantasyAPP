@@ -261,24 +261,10 @@ else:
                         clean_name = format_match_name(m_name)
                         win = m_data['winner']
                         
-                        c1, c2, c3 = st.columns([2, 1, 1])
-                        c1.write(f"**{clean_name}** | Winner: **{win}**")
+                        col1, col2 = st.columns([3, 1])
+                        col1.write(f"**{clean_name}** | Winner: **{win}**")
                         
-                        if c2.button("🔓 Unlock", key=f"unlock_{m_name}"):
-                            st.session_state[f'confirm_unlock_{m_name}'] = True
-                            
-                        if st.session_state.get(f'confirm_unlock_{m_name}', False):
-                            st.warning(f"Are you sure you want to set {clean_name} back to Pending?")
-                            cc1, cc2 = st.columns(2)
-                            if cc1.button("Yes, Unlock", key=f"y_u_{m_name}"):
-                                db.collection('matches').document(m_name).update({'winner': 'PENDING'})
-                                st.session_state[f'confirm_unlock_{m_name}'] = False
-                                st.rerun()
-                            if cc2.button("Cancel", key=f"n_u_{m_name}"):
-                                st.session_state[f'confirm_unlock_{m_name}'] = False
-                                st.rerun()
-                            
-                        if c3.button("🗑️ Delete", key=f"del_lock_{m_name}"):
+                        if col2.button("🗑️ Delete", key=f"del_lock_{m_name}"):
                             st.session_state[f'confirm_del_l_{m_name}'] = True
                             
                         if st.session_state.get(f'confirm_del_l_{m_name}', False):
@@ -296,7 +282,7 @@ else:
             else:
                 st.info("No tournaments available.")
 
-        # Tab 3: Player Picks (Filtered & Override Fixed)
+        # Tab 3: Player Picks (Match IDs visible, Sorted by nearest deadline)
         with h_tabs[2]:
             st.subheader("Player Predictions by Match")
             if not active_tournaments:
@@ -314,17 +300,13 @@ else:
                         m_list.append(d)
                 
                 if m_list:
-                    m_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']))
+                    # Sort primarily by closest deadline, secondarily by match number
+                    m_list.sort(key=lambda x: (datetime.fromisoformat(x['deadline']), x.get('match_number', 0)))
                     
-                    # Dictionary to cleanly map the Match ID to the display name for the dropdown
-                    match_options = {m['match_id']: format_match_name(m['match_id']) for m in m_list}
+                    # Supply the raw match IDs to the dropdown so the Host sees Match 1, Match 2, etc.
+                    match_options = [m['match_id'] for m in m_list]
                     
-                    pick_m_sel = st.selectbox(
-                        "Select Pending Match", 
-                        options=list(match_options.keys()), 
-                        format_func=lambda x: match_options[x],
-                        key="host_picks_m"
-                    )
+                    pick_m_sel = st.selectbox("Select Pending Match", match_options, key="host_picks_m")
                     
                     sel_m_data = next((m for m in m_list if m['match_id'] == pick_m_sel), None)
                     if sel_m_data:
@@ -351,7 +333,6 @@ else:
                         sel_user = st.selectbox("Select User", users, key="override_u")
                         override_pick = st.radio("Select Team", [sel_m_data['team1'], sel_m_data['team2']], key="override_pick")
                         
-                        # --- THE FIX: Using a simple checkbox to prevent the Streamlit Button Reset Bug ---
                         confirm_action = st.checkbox(f"I confirm I want to modify {sel_user}'s pick", key="confirm_check_pick")
                         
                         c1, c2 = st.columns(2)
