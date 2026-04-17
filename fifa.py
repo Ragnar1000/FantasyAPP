@@ -191,7 +191,7 @@ else:
                 for doc in all_m_docs:
                     data = doc.to_dict()
                     data['match_id'] = doc.id
-                    if data.get('winner') == 'PENDING':
+                    if data.get('winner', 'PENDING') == 'PENDING':
                         pending_list.append(data)
                     else:
                         locked_list.append(data)
@@ -296,7 +296,7 @@ else:
             else:
                 st.info("No tournaments available.")
 
-        # Tab 3: Player Picks (Filtered & Override Added)
+        # Tab 3: Player Picks (Filtered & Override Fixed)
         with h_tabs[2]:
             st.subheader("Player Predictions by Match")
             if not active_tournaments:
@@ -304,21 +304,27 @@ else:
             else:
                 view_tourney = st.radio("Select Tournament", active_tournaments, horizontal=True, key="host_picks_t")
                 
-                # Only show PENDING matches here
-                m_docs = db.collection('matches').where('tournament', '==', view_tourney).where('winner', '==', 'PENDING').stream()
+                # Manual Python filter to completely guarantee no locked matches show up
+                all_tourney_matches = db.collection('matches').where('tournament', '==', view_tourney).stream()
                 m_list = []
-                for doc in m_docs:
+                for doc in all_tourney_matches:
                     d = doc.to_dict()
-                    d['match_id'] = doc.id
-                    m_list.append(d)
+                    if d.get('winner', 'PENDING') == 'PENDING':
+                        d['match_id'] = doc.id
+                        m_list.append(d)
                 
                 if m_list:
                     m_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']))
                     
-                    # Show the exact match ID (including Match Number) to the host
-                    match_options = [m['match_id'] for m in m_list]
+                    # Dictionary to cleanly map the Match ID to the display name for the dropdown
+                    match_options = {m['match_id']: format_match_name(m['match_id']) for m in m_list}
                     
-                    pick_m_sel = st.selectbox("Select Pending Match", match_options, key="host_picks_m")
+                    pick_m_sel = st.selectbox(
+                        "Select Pending Match", 
+                        options=list(match_options.keys()), 
+                        format_func=lambda x: match_options[x],
+                        key="host_picks_m"
+                    )
                     
                     sel_m_data = next((m for m in m_list if m['match_id'] == pick_m_sel), None)
                     if sel_m_data:
@@ -341,64 +347,51 @@ else:
                     st.info("As the Host, you can safely submit, change, or delete a pick on behalf of any user.")
                     
                     users = [u.id for u in db.collection('users').stream() if u.id != 'admin']
-                    if users:
+                    if users and sel_m_data:
                         sel_user = st.selectbox("Select User", users, key="override_u")
+                        override_pick = st.radio("Select Team", [sel_m_data['team1'], sel_m_data['team2']], key="override_pick")
                         
-                        if sel_m_data:
-                            override_pick = st.radio("Select Team", [sel_m_data['team1'], sel_m_data['team2']], key="override_pick")
-                            
-                            c1, c2 = st.columns(2)
-                            if c1.button("Save / Update Pick"):
-                                st.session_state['confirm_update_pick'] = True
+                        # --- THE FIX: Using a simple checkbox to prevent the Streamlit Button Reset Bug ---
+                        confirm_action = st.checkbox(f"I confirm I want to modify {sel_user}'s pick", key="confirm_check_pick")
+                        
+                        c1, c2 = st.columns(2)
+                        
+                        if c1.button("Save / Update Pick"):
+                            if confirm_action:
+                                existing_preds = list(db.collection('predictions').where('username', '==', sel_user).where('match_name', '==', pick_m_sel).stream())
+                                if existing_preds:
+                                    for doc in existing_preds:
+                                        doc.reference.update({'user_guess': override_pick})
+                                else:
+                                    db.collection('predictions').add({
+                                        'username': sel_user,
+                                        'match_name': pick_m_sel,
+                                        'user_guess': override_pick,
+                                        'tournament': view_tourney
+                                    })
+                                st.success(f"Successfully updated pick for {sel_user}!")
+                                st.rerun()
+                            else:
+                                st.error("Please check the confirmation box above before clicking update!")
                                 
-                            if st.session_state.get('confirm_update_pick', False):
-                                st.warning(f"Confirm overriding pick to {override_pick} for {sel_user}?")
-                                cc1, cc2 = st.columns(2)
-                                if cc1.button("Yes, Update", key="y_up"):
-                                    existing_preds = list(db.collection('predictions').where('username', '==', sel_user).where('match_name', '==', pick_m_sel).stream())
-                                    if existing_preds:
-                                        for doc in existing_preds:
-                                            doc.reference.update({'user_guess': override_pick})
-                                    else:
-                                        db.collection('predictions').add({
-                                            'username': sel_user,
-                                            'match_name': pick_m_sel,
-                                            'user_guess': override_pick,
-                                            'tournament': view_tourney
-                                        })
-                                    st.session_state['confirm_update_pick'] = False
-                                    st.success(f"Successfully updated pick for {sel_user}!")
+                        if c2.button("🗑️ Delete Pick"):
+                            if confirm_action:
+                                existing_preds = list(db.collection('predictions').where('username', '==', sel_user).where('match_name', '==', pick_m_sel).stream())
+                                if existing_preds:
+                                    for doc in existing_preds:
+                                        doc.reference.delete()
+                                    st.success(f"Deleted pick for {sel_user}!")
                                     st.rerun()
-                                if cc2.button("Cancel", key="n_up"):
-                                    st.session_state['confirm_update_pick'] = False
-                                    st.rerun()
-                                    
-                            if c2.button("🗑️ Delete Pick"):
-                                st.session_state['confirm_delete_pick'] = True
-                                
-                            if st.session_state.get('confirm_delete_pick', False):
-                                st.error(f"Confirm completely deleting {sel_user}'s pick for this match?")
-                                cc1, cc2 = st.columns(2)
-                                if cc1.button("Yes, Delete", key="y_dp"):
-                                    existing_preds = list(db.collection('predictions').where('username', '==', sel_user).where('match_name', '==', pick_m_sel).stream())
-                                    if existing_preds:
-                                        for doc in existing_preds:
-                                            doc.reference.delete()
-                                        st.session_state['confirm_delete_pick'] = False
-                                        st.success(f"Deleted pick for {sel_user}!")
-                                        st.rerun()
-                                    else:
-                                        st.warning("This user hasn't made a pick for this match.")
-                                        st.session_state['confirm_delete_pick'] = False
-                                if cc2.button("Cancel", key="n_dp"):
-                                    st.session_state['confirm_delete_pick'] = False
-                                    st.rerun()
+                                else:
+                                    st.warning("This user hasn't made a pick for this match.")
+                            else:
+                                st.error("Please check the confirmation box above before clicking delete!")
                     else:
-                        st.warning("No users registered.")
+                        st.warning("No users registered or no match selected.")
                 else:
                     st.success("No pending matches left in this tournament! (Completed matches are hidden).")
 
-        # Tab 4: HOST LEADERBOARD (Clean view, hidden math preserved)
+        # Tab 4: HOST LEADERBOARD
         with h_tabs[3]:
             st.subheader("Current Rankings")
             if active_tournaments:
@@ -418,7 +411,6 @@ else:
                         if guess == completed[match]: scores[user]['W'] += 1
                         else: scores[user]['L'] += 1
                         
-                # Math reads database overrides seamlessly
                 adj_docs = db.collection('leaderboard_adjustments').where('tournament', '==', l_tourney).stream()
                 for adj in adj_docs:
                     data = adj.to_dict()
