@@ -296,7 +296,7 @@ else:
             else:
                 st.info("No tournaments available.")
 
-        # Tab 3: Player Picks (View Only)
+        # Tab 3: Player Picks (Filtered & Override Added)
         with h_tabs[2]:
             st.subheader("Player Predictions by Match")
             if not active_tournaments:
@@ -304,7 +304,8 @@ else:
             else:
                 view_tourney = st.radio("Select Tournament", active_tournaments, horizontal=True, key="host_picks_t")
                 
-                m_docs = db.collection('matches').where('tournament', '==', view_tourney).stream()
+                # Only show PENDING matches here
+                m_docs = db.collection('matches').where('tournament', '==', view_tourney).where('winner', '==', 'PENDING').stream()
                 m_list = []
                 for doc in m_docs:
                     d = doc.to_dict()
@@ -313,14 +314,19 @@ else:
                 
                 if m_list:
                     m_list.sort(key=lambda x: datetime.fromisoformat(x['deadline']))
-                    match_options = {m['match_id']: format_match_name(m['match_id']) for m in m_list}
                     
-                    pick_m_sel = st.selectbox(
-                        "Select Match", 
-                        options=list(match_options.keys()), 
-                        format_func=lambda x: match_options[x],
-                        key="host_picks_m"
-                    )
+                    # Show the exact match ID (including Match Number) to the host
+                    match_options = [m['match_id'] for m in m_list]
+                    
+                    pick_m_sel = st.selectbox("Select Pending Match", match_options, key="host_picks_m")
+                    
+                    sel_m_data = next((m for m in m_list if m['match_id'] == pick_m_sel), None)
+                    if sel_m_data:
+                        dead = datetime.fromisoformat(sel_m_data['deadline'])
+                        if datetime.now(PKT) > dead:
+                            st.warning(f"⚠️ **Deadline Passed ({dead.strftime('%I:%M %p')}).** Match is locked for users, but YOU can still override picks.")
+                        else:
+                            st.info(f"⏳ Match is open until {dead.strftime('%b %d, %I:%M %p')}.")
                     
                     picks = db.collection('predictions').where('match_name', '==', pick_m_sel).stream()
                     picks_data = [p.to_dict() for p in picks]
@@ -329,8 +335,68 @@ else:
                         st.table([{"Player": p['username'], "Their Pick": p['user_guess']} for p in picks_data])
                     else:
                         st.info("No predictions exist for this match yet.")
+                        
+                    st.divider()
+                    st.subheader("🛠️ Manual Override")
+                    st.info("As the Host, you can safely submit, change, or delete a pick on behalf of any user.")
+                    
+                    users = [u.id for u in db.collection('users').stream() if u.id != 'admin']
+                    if users:
+                        sel_user = st.selectbox("Select User", users, key="override_u")
+                        
+                        if sel_m_data:
+                            override_pick = st.radio("Select Team", [sel_m_data['team1'], sel_m_data['team2']], key="override_pick")
+                            
+                            c1, c2 = st.columns(2)
+                            if c1.button("Save / Update Pick"):
+                                st.session_state['confirm_update_pick'] = True
+                                
+                            if st.session_state.get('confirm_update_pick', False):
+                                st.warning(f"Confirm overriding pick to {override_pick} for {sel_user}?")
+                                cc1, cc2 = st.columns(2)
+                                if cc1.button("Yes, Update", key="y_up"):
+                                    existing_preds = list(db.collection('predictions').where('username', '==', sel_user).where('match_name', '==', pick_m_sel).stream())
+                                    if existing_preds:
+                                        for doc in existing_preds:
+                                            doc.reference.update({'user_guess': override_pick})
+                                    else:
+                                        db.collection('predictions').add({
+                                            'username': sel_user,
+                                            'match_name': pick_m_sel,
+                                            'user_guess': override_pick,
+                                            'tournament': view_tourney
+                                        })
+                                    st.session_state['confirm_update_pick'] = False
+                                    st.success(f"Successfully updated pick for {sel_user}!")
+                                    st.rerun()
+                                if cc2.button("Cancel", key="n_up"):
+                                    st.session_state['confirm_update_pick'] = False
+                                    st.rerun()
+                                    
+                            if c2.button("🗑️ Delete Pick"):
+                                st.session_state['confirm_delete_pick'] = True
+                                
+                            if st.session_state.get('confirm_delete_pick', False):
+                                st.error(f"Confirm completely deleting {sel_user}'s pick for this match?")
+                                cc1, cc2 = st.columns(2)
+                                if cc1.button("Yes, Delete", key="y_dp"):
+                                    existing_preds = list(db.collection('predictions').where('username', '==', sel_user).where('match_name', '==', pick_m_sel).stream())
+                                    if existing_preds:
+                                        for doc in existing_preds:
+                                            doc.reference.delete()
+                                        st.session_state['confirm_delete_pick'] = False
+                                        st.success(f"Deleted pick for {sel_user}!")
+                                        st.rerun()
+                                    else:
+                                        st.warning("This user hasn't made a pick for this match.")
+                                        st.session_state['confirm_delete_pick'] = False
+                                if cc2.button("Cancel", key="n_dp"):
+                                    st.session_state['confirm_delete_pick'] = False
+                                    st.rerun()
+                    else:
+                        st.warning("No users registered.")
                 else:
-                    st.warning("No matches currently exist to view.")
+                    st.success("No pending matches left in this tournament! (Completed matches are hidden).")
 
         # Tab 4: HOST LEADERBOARD (Clean view, hidden math preserved)
         with h_tabs[3]:
